@@ -1,11 +1,12 @@
 meta:
 - desc: |
     Setup 4 node ceph cluster using ceph-deploy, use latest
-    stable kraken as initial release, upgrade to luminous and
-    also setup mgr nodes along after upgrade, check for
-    cluster to reach healthy state, After upgrade run kernel tar/untar
-    task and systemd task. This test will detect any
-    ceph upgrade issue and systemd issues.
+    stable jewel as initial release, upgrade to stable luminous and
+    also setup mgr nodes along after upgrade, check for cluter to
+    reach healthy state and run kernel tar/untar task. Finally upgrade
+    to current master branch and wait for healthy state, Run systemd and
+    mixed-load gen task. This test will detect any ceph upgrade issue
+    and systemd issues.
 overrides:
   ceph-deploy:
     fs: xfs
@@ -43,7 +44,7 @@ tasks:
     skip-mgr: True
 - ceph-deploy.upgrade:
     branch:
-      dev: luminous
+      stable: luminous
     setup-mgr-node: True
     check-for-healthy: True
     roles:
@@ -54,6 +55,15 @@ tasks:
     clients:
       all:
         - kernel_untar_build.sh
+- ceph-deploy.upgrade:
+    branch:
+      dev: master
+    setup-mgr-node: False
+    check-for-healthy: True
+    roles:
+      - mon.a
+      - mon.b
+      - mon.c
 - systemd:
 - workunit:
     clients:
