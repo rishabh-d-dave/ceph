@@ -27,6 +27,11 @@ namespace rgw {
 namespace auth {
 namespace s3 {
 
+static constexpr auto RGW_AUTH_GRACE = std::chrono::minutes{15};
+
+// returns true if the request time is within RGW_AUTH_GRACE of the current time
+bool is_time_skew_ok(time_t t);
+
 class ExternalAuthStrategy : public rgw::auth::Strategy,
                              public rgw::auth::RemoteApplier::Factory {
   typedef rgw::auth::IdentityApplier::aplptr_t aplptr_t;
@@ -344,7 +349,7 @@ int parse_credentials(const req_info& info,                     /* in */
                       boost::string_view& signedheaders,        /* out */
                       boost::string_view& signature,            /* out */
                       boost::string_view& date,                 /* out */
-                      bool& using_qs);                          /* out */
+                      const bool using_qs);                     /* in */
 
 static inline std::string get_v4_canonical_uri(const req_info& info) {
   /* The code should normalize according to RFC 3986 but S3 does NOT do path

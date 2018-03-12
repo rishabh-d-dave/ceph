@@ -9,10 +9,13 @@
 #include "include/stringify.h"
 #include <boost/algorithm/string.hpp>
 #include <boost/lexical_cast.hpp>
-#include <boost/regex.hpp>
+#include <regex>
 
 // Definitions for enums
 #include "common/perf_counters.h"
+
+// rbd feature validation
+#include "librbd/Features.h"
 
 
 void Option::dump_value(const char *field_name,
@@ -345,6 +348,11 @@ std::vector<Option> get_global_options() {
     .set_daemon_default(true)
     .set_description("send critical error log lines to stderr"),
 
+    Option("log_stderr_prefix", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_description("String to prefix log messages with when sent to stderr")
+    .set_long_description("This is useful in container environments when combined with mon_cluster_log_to_stderr.  The mon log prefixes each line with the channel name (e.g., 'default', 'audit'), while log_stderr_prefix can be set to 'debug '.")
+    .add_see_also("mon_cluster_log_to_stderr"),
+
     Option("log_to_syslog", Option::TYPE_BOOL, Option::LEVEL_BASIC)
     .set_default(false)
     .set_description("send log lines to syslog facility"),
@@ -426,6 +434,11 @@ std::vector<Option> get_global_options() {
     Option("clog_to_graylog_port", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_default("12201")
     .set_description(""),
+
+    Option("mon_cluster_log_to_stderr", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(false)
+    .set_description("Send cluster log messages to stderr (prefixed by channel)")
+    .add_see_also("log_stderr_prefix"),
 
     Option("mon_cluster_log_to_syslog", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_default("default=false")
@@ -754,6 +767,7 @@ std::vector<Option> get_global_options() {
 
     Option("ms_async_op_threads", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(3)
+    .set_min_max(1, 24)
     .set_description(""),
 
     Option("ms_async_max_op_threads", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
@@ -1324,6 +1338,11 @@ std::vector<Option> get_global_options() {
     .set_safe()
     .set_description("in which level of parent bucket the reporters are counted"),
 
+    Option("mon_osd_snap_trim_queue_warn_on", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(32768)
+    .set_description("Warn when snap trim queue is that large (or larger).")
+    .set_long_description("Warn when snap trim queue length for at least one PG crosses this value, as this is indicator of snap trimmer not keeping up, wasting disk space"),
+
     Option("mon_osd_force_trim_to", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(0)
     .set_description(""),
@@ -1617,6 +1636,10 @@ std::vector<Option> get_global_options() {
     .set_min(2)
     .set_description("Number of striping periods to zero head of MDS journal write position"),
 
+     Option("osd_smart_report_timeout", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    .set_default(5)
+    .set_description("Timeout (in seconds) for smarctl to run, default is set to 5"),
+
     Option("osd_check_max_object_name_len_on_startup", Option::TYPE_BOOL, Option::LEVEL_DEV)
     .set_default(true)
     .set_description(""),
@@ -1907,10 +1930,6 @@ std::vector<Option> get_global_options() {
     .set_default(true)
     .set_description(""),
 
-    Option("osd_map_max_advance", Option::TYPE_INT, Option::LEVEL_ADVANCED)
-    .set_default(40)
-    .set_description(""),
-
     Option("osd_map_cache_size", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(50)
     .set_description(""),
@@ -1922,6 +1941,11 @@ std::vector<Option> get_global_options() {
     Option("osd_map_share_max_epochs", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(40)
     .set_description(""),
+
+    Option("osd_pg_epoch_max_lag_factor", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(2.0)
+    .set_description("Max multiple of the map cache that PGs can lag before we throttle map injest")
+    .add_see_also("osd_map_cache_size"),
 
     Option("osd_inject_bad_map_crc_probability", Option::TYPE_FLOAT, Option::LEVEL_DEV)
     .set_default(0)
@@ -1937,14 +1961,6 @@ std::vector<Option> get_global_options() {
 
     Option("osd_max_markdown_count", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(5)
-    .set_description(""),
-
-    Option("osd_peering_wq_threads", Option::TYPE_INT, Option::LEVEL_ADVANCED)
-    .set_default(2)
-    .set_description(""),
-
-    Option("osd_peering_wq_batch_size", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
-    .set_default(20)
     .set_description(""),
 
     Option("osd_op_pq_max_tokens_per_priority", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
@@ -2031,7 +2047,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_client_op_wgt", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(500.0)
@@ -2051,7 +2068,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_client_op_lim", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.0)
@@ -2071,7 +2089,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_osd_rep_op_res", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(1000.0)
@@ -2091,7 +2110,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_osd_rep_op_wgt", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(500.0)
@@ -2111,7 +2131,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_osd_rep_op_lim", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.0)
@@ -2131,7 +2152,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_snap_res", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.0)
@@ -2151,7 +2173,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_snap_wgt", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(1.0)
@@ -2171,7 +2194,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_snap_lim", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.001)
@@ -2191,7 +2215,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_recov_res", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.0)
@@ -2211,7 +2236,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_recov_wgt", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(1.0)
@@ -2231,7 +2257,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_recov_lim", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.001)
@@ -2251,7 +2278,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_wgt")
     .add_see_also("osd_op_queue_mclock_scrub_res")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_scrub_res", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.0)
@@ -2271,7 +2299,8 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_wgt")
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_wgt")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_scrub_wgt", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(1.0)
@@ -2291,11 +2320,154 @@ std::vector<Option> get_global_options() {
     .add_see_also("osd_op_queue_mclock_recov_wgt")
     .add_see_also("osd_op_queue_mclock_recov_lim")
     .add_see_also("osd_op_queue_mclock_scrub_res")
-    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+    .add_see_also("osd_op_queue_mclock_scrub_lim")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
 
     Option("osd_op_queue_mclock_scrub_lim", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.001)
     .set_description("mclock weight of limit requests")
+    .set_long_description("mclock weight of limit requests when osd_op_queue is either 'mclock_opclass' or 'mclock_client'; higher values increase the limit")
+    .add_see_also("osd_op_queue")
+    .add_see_also("osd_op_queue_mclock_client_op_res")
+    .add_see_also("osd_op_queue_mclock_client_op_wgt")
+    .add_see_also("osd_op_queue_mclock_client_op_lim")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_res")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_wgt")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_lim")
+    .add_see_also("osd_op_queue_mclock_snap_res")
+    .add_see_also("osd_op_queue_mclock_snap_wgt")
+    .add_see_also("osd_op_queue_mclock_snap_lim")
+    .add_see_also("osd_op_queue_mclock_recov_res")
+    .add_see_also("osd_op_queue_mclock_recov_wgt")
+    .add_see_also("osd_op_queue_mclock_recov_lim")
+    .add_see_also("osd_op_queue_mclock_scrub_res")
+    .add_see_also("osd_op_queue_mclock_scrub_wgt")
+    .add_see_also("osd_op_queue_mclock_anticipation_timeout"),
+
+    Option("osd_op_queue_mclock_anticipation_timeout", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(0.0)
+    .set_description("mclock anticipation timeout in seconds")
+    .set_long_description("the amount of time that mclock waits until the unused resource is forfeited")
+    .add_see_also("osd_op_queue")
+    .add_see_also("osd_op_queue_mclock_client_op_res")
+    .add_see_also("osd_op_queue_mclock_client_op_wgt")
+    .add_see_also("osd_op_queue_mclock_client_op_lim")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_res")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_wgt")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_lim")
+    .add_see_also("osd_op_queue_mclock_snap_res")
+    .add_see_also("osd_op_queue_mclock_snap_wgt")
+    .add_see_also("osd_op_queue_mclock_snap_lim")
+    .add_see_also("osd_op_queue_mclock_recov_res")
+    .add_see_also("osd_op_queue_mclock_recov_wgt")
+    .add_see_also("osd_op_queue_mclock_recov_lim")
+    .add_see_also("osd_op_queue_mclock_scrub_res")
+    .add_see_also("osd_op_queue_mclock_scrub_wgt")
+    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+
+    Option("osd_op_queue_mclock_pg_delete_res", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(0.0)
+    .set_description("mclock reservation of pg delete work")
+    .set_long_description("mclock reservation of pg delete work when osd_op_queue is either 'mclock_opclass' or 'mclock_client'; higher values increase the reservation")
+    .add_see_also("osd_op_queue")
+    .add_see_also("osd_op_queue_mclock_client_op_res")
+    .add_see_also("osd_op_queue_mclock_client_op_wgt")
+    .add_see_also("osd_op_queue_mclock_client_op_lim")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_res")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_wgt")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_lim")
+    .add_see_also("osd_op_queue_mclock_snap_res")
+    .add_see_also("osd_op_queue_mclock_snap_wgt")
+    .add_see_also("osd_op_queue_mclock_snap_lim")
+    .add_see_also("osd_op_queue_mclock_recov_res")
+    .add_see_also("osd_op_queue_mclock_recov_wgt")
+    .add_see_also("osd_op_queue_mclock_recov_lim")
+    .add_see_also("osd_op_queue_mclock_scrub_wgt")
+    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+
+    Option("osd_op_queue_mclock_pg_delete_wgt", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(1.0)
+    .set_description("mclock weight of pg delete work")
+    .set_long_description("mclock weight of pg delete work when osd_op_queue is either 'mclock_opclass' or 'mclock_client'; higher values increase the weight")
+    .add_see_also("osd_op_queue")
+    .add_see_also("osd_op_queue_mclock_client_op_res")
+    .add_see_also("osd_op_queue_mclock_client_op_wgt")
+    .add_see_also("osd_op_queue_mclock_client_op_lim")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_res")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_wgt")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_lim")
+    .add_see_also("osd_op_queue_mclock_snap_res")
+    .add_see_also("osd_op_queue_mclock_snap_wgt")
+    .add_see_also("osd_op_queue_mclock_snap_lim")
+    .add_see_also("osd_op_queue_mclock_recov_res")
+    .add_see_also("osd_op_queue_mclock_recov_wgt")
+    .add_see_also("osd_op_queue_mclock_recov_lim")
+    .add_see_also("osd_op_queue_mclock_scrub_res")
+    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+
+    Option("osd_op_queue_mclock_pg_delete_lim", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(0.001)
+    .set_description("mclock weight of pg delete work limit requests")
+    .set_long_description("mclock weight of limit pg delete work when osd_op_queue is either 'mclock_opclass' or 'mclock_client'; higher values increase the limit")
+    .add_see_also("osd_op_queue")
+    .add_see_also("osd_op_queue_mclock_client_op_res")
+    .add_see_also("osd_op_queue_mclock_client_op_wgt")
+    .add_see_also("osd_op_queue_mclock_client_op_lim")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_res")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_wgt")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_lim")
+    .add_see_also("osd_op_queue_mclock_snap_res")
+    .add_see_also("osd_op_queue_mclock_snap_wgt")
+    .add_see_also("osd_op_queue_mclock_snap_lim")
+    .add_see_also("osd_op_queue_mclock_recov_res")
+    .add_see_also("osd_op_queue_mclock_recov_wgt")
+    .add_see_also("osd_op_queue_mclock_recov_lim")
+    .add_see_also("osd_op_queue_mclock_scrub_res")
+    .add_see_also("osd_op_queue_mclock_scrub_wgt"),
+
+    Option("osd_op_queue_mclock_peering_event_res", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(0.0)
+    .set_description("mclock reservation of peering events")
+    .set_long_description("mclock reservation of scrub requests when osd_op_queue is either 'mclock_opclass' or 'mclock_client'; higher values increase the reservation")
+    .add_see_also("osd_op_queue")
+    .add_see_also("osd_op_queue_mclock_client_op_res")
+    .add_see_also("osd_op_queue_mclock_client_op_wgt")
+    .add_see_also("osd_op_queue_mclock_client_op_lim")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_res")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_wgt")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_lim")
+    .add_see_also("osd_op_queue_mclock_snap_res")
+    .add_see_also("osd_op_queue_mclock_snap_wgt")
+    .add_see_also("osd_op_queue_mclock_snap_lim")
+    .add_see_also("osd_op_queue_mclock_recov_res")
+    .add_see_also("osd_op_queue_mclock_recov_wgt")
+    .add_see_also("osd_op_queue_mclock_recov_lim")
+    .add_see_also("osd_op_queue_mclock_scrub_wgt")
+    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+
+    Option("osd_op_queue_mclock_peering_event_wgt", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(1.0)
+    .set_description("mclock weight of peering events")
+    .set_long_description("mclock weight of scrub requests when osd_op_queue is either 'mclock_opclass' or 'mclock_client'; higher values increase the weight")
+    .add_see_also("osd_op_queue")
+    .add_see_also("osd_op_queue_mclock_client_op_res")
+    .add_see_also("osd_op_queue_mclock_client_op_wgt")
+    .add_see_also("osd_op_queue_mclock_client_op_lim")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_res")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_wgt")
+    .add_see_also("osd_op_queue_mclock_osd_rep_op_lim")
+    .add_see_also("osd_op_queue_mclock_snap_res")
+    .add_see_also("osd_op_queue_mclock_snap_wgt")
+    .add_see_also("osd_op_queue_mclock_snap_lim")
+    .add_see_also("osd_op_queue_mclock_recov_res")
+    .add_see_also("osd_op_queue_mclock_recov_wgt")
+    .add_see_also("osd_op_queue_mclock_recov_lim")
+    .add_see_also("osd_op_queue_mclock_scrub_res")
+    .add_see_also("osd_op_queue_mclock_scrub_lim"),
+
+    Option("osd_op_queue_mclock_peering_event_lim", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(0.001)
+    .set_description("mclock weight of limit peering events")
     .set_long_description("mclock weight of limit requests when osd_op_queue is either 'mclock_opclass' or 'mclock_client'; higher values increase the limit")
     .add_see_also("osd_op_queue")
     .add_see_also("osd_op_queue_mclock_client_op_res")
@@ -2490,7 +2662,7 @@ std::vector<Option> get_global_options() {
     .set_description(""),
 
     Option("osd_recovery_max_omap_entries_per_chunk", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
-    .set_default(64000)
+    .set_default(8096)
     .set_description(""),
 
     Option("osd_copyfrom_max_chunk", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
@@ -2515,93 +2687,116 @@ std::vector<Option> get_global_options() {
 
     Option("osd_max_scrubs", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(1)
-    .set_description(""),
+    .set_description("Maximum concurrent scrubs on a single OSD"),
 
     Option("osd_scrub_during_recovery", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(false)
-    .set_description(""),
+    .set_description("Allow scrubbing when PGs on the OSD are undergoing recovery"),
 
     Option("osd_scrub_begin_hour", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(0)
-    .set_description(""),
+    .set_description("Restrict scrubbing to this hour of the day or later")
+    .add_see_also("osd_scrub_end_hour"),
 
     Option("osd_scrub_end_hour", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(24)
-    .set_description(""),
+    .set_description("Restrict scrubbing to hours of the day earlier than this")
+    .add_see_also("osd_scrub_begin_hour"),
 
     Option("osd_scrub_begin_week_day", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(0)
-    .set_description("The begin week day permits to scrub, include this day, 0 Sunday,1 Monday, .., 6 Saturday"),
+    .set_description("Restrict scrubbing to this day of the week or later")
+    .set_long_description("0 or 7 = Sunday, 1 = Monday, etc.")
+    .add_see_also("osd_scrub_end_week_day"),
 
     Option("osd_scrub_end_week_day", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(7)
-    .set_description("The end week day permits to scrub, not include this day, 0 Sunday,1 Monday, .., 6 Saturday"),
+    .set_description("Restrict scrubbing to days of the week earlier than this")
+    .set_long_description("0 or 7 = Sunday, 1 = Monday, etc.")
+    .add_see_also("osd_scrub_begin_week_day"),
 
     Option("osd_scrub_load_threshold", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.5)
-    .set_description(""),
+    .set_description("Allow scrubbing when system load divided by number of CPUs is below this value"),
 
     Option("osd_scrub_min_interval", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(1_day)
-    .set_description(""),
+    .set_description("Scrub each PG no more often than this interval")
+    .add_see_also("osd_scrub_max_interval"),
 
     Option("osd_scrub_max_interval", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(7_day)
-    .set_description(""),
+    .set_description("Scrub each PG no less often than this interval")
+    .add_see_also("osd_scrub_min_interval"),
 
     Option("osd_scrub_interval_randomize_ratio", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.5)
-    .set_description(""),
+    .set_description("Ratio of scrub interval to randomly vary")
+    .set_long_description("This prevents a scrub 'stampede' by randomly varying the scrub intervals so that they are soon uniformly distributed over the week")
+    .add_see_also("osd_scrub_min_interval"),
 
-    Option("osd_scrub_backoff_ratio", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    Option("osd_scrub_backoff_ratio", Option::TYPE_FLOAT, Option::LEVEL_DEV)
     .set_default(.66)
-    .set_description(""),
+    .set_description("Backoff ratio after a failed scrub scheduling attempt"),
 
     Option("osd_scrub_chunk_min", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(5)
-    .set_description(""),
+    .set_description("Minimum number of objects to scrub in a single chunk")
+    .add_see_also("osd_scrub_chunk_max"),
 
     Option("osd_scrub_chunk_max", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(25)
-    .set_description(""),
+    .set_description("Maximum number of objects to scrub in a single chunk")
+    .add_see_also("osd_scrub_chunk_min"),
 
     Option("osd_scrub_sleep", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0)
-    .set_description(""),
+    .set_description("Duration to inject a delay during scrubbing"),
 
     Option("osd_scrub_auto_repair", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(false)
-    .set_description(""),
+    .set_description("Automatically repair damaged objects detected during scrub"),
 
     Option("osd_scrub_auto_repair_num_errors", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(5)
-    .set_description(""),
+    .set_description("Maximum number of detected errors to automatically repair")
+    .add_see_also("osd_scrub_auto_repair"),
+
+    Option("osd_scrub_max_preemptions", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    .set_default(5)
+    .set_description("Set the maximum number of times we will preempt a deep scrub due to a client operation before blocking client IO to complete the scrub"),
 
     Option("osd_deep_scrub_interval", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(7_day)
-    .set_description(""),
+    .set_description("Deep scrub each PG (i.e., verify data checksums) at least this often"),
 
     Option("osd_deep_scrub_randomize_ratio", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.15)
-    .set_description(""),
+    .set_description("Ratio of deep scrub interval to randomly vary")
+    .set_long_description("This prevents a deep scrub 'stampede' by randomly varying the scrub intervals so that they are soon uniformly distributed over the week")
+    .add_see_also("osd_deep_scrub_interval"),
 
     Option("osd_deep_scrub_stride", Option::TYPE_INT, Option::LEVEL_ADVANCED)
-    .set_default(524288)
-    .set_description(""),
+    .set_default(512_K)
+    .set_description("Number of bytes to read from an object at a time during deep scrub"),
+
+    Option("osd_deep_scrub_keys", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    .set_default(1024)
+    .set_description("Number of keys to read from an object at a time during deep scrub"),
 
     Option("osd_deep_scrub_update_digest_min_age", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(2_hr)
-    .set_description(""),
+    .set_description("Update overall object digest only if object was last modified longer ago than this"),
 
     Option("osd_deep_scrub_large_omap_object_key_threshold", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(2000000)
-    .set_description("threshold for number of keys to determine a large omap object")
+    .set_description("Warn when we encounter an object with more omap keys than this")
     .add_service("osd")
     .add_see_also("osd_deep_scrub_large_omap_object_value_sum_threshold"),
 
     Option("osd_deep_scrub_large_omap_object_value_sum_threshold", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(1_G)
-    .set_description("threshold for summed size (bytes) of all key values to determine a large omap object")
+    .set_description("Warn when we encounter an object with more omap key bytes than this")
     .add_service("osd")
     .add_see_also("osd_deep_scrub_large_omap_object_key_threshold"),
 
@@ -2784,6 +2979,10 @@ std::vector<Option> get_global_options() {
     Option("osd_debug_verify_cached_snaps", Option::TYPE_BOOL, Option::LEVEL_DEV)
     .set_default(false)
     .set_description(""),
+
+    Option("osd_debug_deep_scrub_sleep", Option::TYPE_FLOAT, Option::LEVEL_DEV)
+    .set_default(0)
+    .set_description("Inject an expensive sleep during deep scrub IO to make it easier to induce preemption"),
 
     Option("osd_enable_op_tracker", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(true)
@@ -3012,6 +3211,10 @@ std::vector<Option> get_global_options() {
     .set_default(3)
     .set_description(""),
 
+    Option("osd_peering_op_priority", Option::TYPE_UINT, Option::LEVEL_DEV)
+    .set_default(255)
+    .set_description(""),
+
     Option("osd_snap_trim_priority", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(5)
     .set_description(""),
@@ -3020,13 +3223,21 @@ std::vector<Option> get_global_options() {
     .set_default(1<<20)
     .set_description(""),
 
-    Option("osd_scrub_priority", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    Option("osd_pg_delete_priority", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(5)
     .set_description(""),
 
+    Option("osd_pg_delete_cost", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    .set_default(1<<20)
+    .set_description(""),
+
+    Option("osd_scrub_priority", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    .set_default(5)
+    .set_description("Priority for scrub operations in work queue"),
+
     Option("osd_scrub_cost", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(50<<20)
-    .set_description(""),
+    .set_description("Cost for scrub operations in work queue"),
 
     Option("osd_requested_scrub_priority", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(120)
@@ -3187,6 +3398,14 @@ std::vector<Option> get_global_options() {
     .set_default(-1)
     .set_description(""),
 
+    Option("bdev_enable_discard", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(false)
+    .set_description(""),
+
+    Option("bdev_async_discard", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    .set_default(false)
+    .set_description(""),
+
     Option("bluefs_alloc_size", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(1_M)
     .set_description(""),
@@ -3273,6 +3492,11 @@ std::vector<Option> get_global_options() {
     Option("bluestore_bluefs_balance_interval", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(1)
     .set_description("How frequently (in seconds) to balance free space between BlueFS and BlueStore"),
+
+    Option("bluestore_bluefs_balance_failure_dump_interval", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    .set_default(0)
+    .set_description("How frequently (in seconds) to dump information on "
+      "allocation failure occurred during BlueFS space rebalance"),
 
     Option("bluestore_spdk_mem", Option::TYPE_UINT, Option::LEVEL_DEV)
     .set_default(512)
@@ -3526,9 +3750,12 @@ std::vector<Option> get_global_options() {
     .set_default(.99)
     .set_description("Ratio of bluestore cache to devote to kv database (rocksdb)"),
 
-    Option("bluestore_cache_kv_max", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    Option("bluestore_cache_kv_max", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(512_M)
-    .set_description("Max memory (bytes) to devote to kv database (rocksdb)"),
+    .set_description("Max memory (bytes) to devote to kv database (rocksdb)")
+    .set_long_description("A negative value means using bluestore_cache_meta_ratio "
+      "and bluestore_cache_kv_ratio instead of calculating these ratios using "
+      "bluestore_cache_size_* and bluestore_cache_kv_max."),
 
     Option("bluestore_kvbackend", Option::TYPE_STR, Option::LEVEL_DEV)
     .set_default("rocksdb")
@@ -3716,6 +3943,9 @@ std::vector<Option> get_global_options() {
     .set_default(0)
     .set_description(""),
 
+    Option("bluestore_debug_inject_bug21040", Option::TYPE_BOOL, Option::LEVEL_DEV)
+    .set_default(false)
+    .set_description(""),
     // -----------------------------------------
     // kstore
 
@@ -5553,14 +5783,14 @@ std::vector<Option> get_rgw_options() {
     .set_default(10_min)
     .set_description(""),
 
-    Option("rgw_bucket_info_cache_expiry_interval", Option::TYPE_UINT,
+    Option("rgw_cache_expiry_interval", Option::TYPE_UINT,
 	   Option::LEVEL_ADVANCED)
     .set_default(15_min)
-    .set_description("Number of seconds before entries in the bucket info "
-		     "cache are assumed stale and re-fetched. Zero is never.")
+    .set_description("Number of seconds before entries in the cache are "
+		     "assumed stale and re-fetched. Zero is never.")
     .add_tag("performance")
     .add_service("rgw")
-    .set_long_description("The Rados Gateway stores metadata about buckets in "
+    .set_long_description("The Rados Gateway stores metadata and objects in "
 			  "an internal cache. This should be kept consistent "
 			  "by the OSD's relaying notify events between "
 			  "multiple watching RGW processes. In the event "
@@ -5581,8 +5811,8 @@ static std::vector<Option> get_rbd_options() {
     .set_default("rbd")
     .set_description("default pool for storing new images")
     .set_validator([](std::string *value, std::string *error_message){
-      boost::regex pattern("^[^@/]+$");
-      if (!boost::regex_match (*value, pattern)) {
+      std::regex pattern("^[^@/]+$");
+      if (!std::regex_match (*value, pattern)) {
         *value = "rbd";
         *error_message = "invalid RBD default pool, resetting to 'rbd'";
       }
@@ -5593,8 +5823,8 @@ static std::vector<Option> get_rbd_options() {
     .set_default("")
     .set_description("default pool for storing data blocks for new images")
     .set_validator([](std::string *value, std::string *error_message){
-      boost::regex pattern("^[^@/]*$");
-      if (!boost::regex_match (*value, pattern)) {
+      std::regex pattern("^[^@/]*$");
+      if (!std::regex_match (*value, pattern)) {
         *value = "";
         *error_message = "ignoring invalid RBD data pool";
       }
@@ -5613,62 +5843,17 @@ static std::vector<Option> get_rbd_options() {
         "+4 -> exclusive-lock, +8 -> object-map, +16 -> fast-diff, "
         "+32 -> deep-flatten, +64 -> journaling, +128 -> data-pool")
     .set_safe()
-    .set_validator([](std::string *value, std::string *error_message){
-      static const std::map<std::string, uint64_t> FEATURE_MAP = {
-        {RBD_FEATURE_NAME_LAYERING, RBD_FEATURE_LAYERING},
-        {RBD_FEATURE_NAME_STRIPINGV2, RBD_FEATURE_STRIPINGV2},
-        {RBD_FEATURE_NAME_EXCLUSIVE_LOCK, RBD_FEATURE_EXCLUSIVE_LOCK},
-        {RBD_FEATURE_NAME_OBJECT_MAP, RBD_FEATURE_OBJECT_MAP},
-        {RBD_FEATURE_NAME_FAST_DIFF, RBD_FEATURE_FAST_DIFF},
-        {RBD_FEATURE_NAME_DEEP_FLATTEN, RBD_FEATURE_DEEP_FLATTEN},
-        {RBD_FEATURE_NAME_JOURNALING, RBD_FEATURE_JOURNALING},
-        {RBD_FEATURE_NAME_DATA_POOL, RBD_FEATURE_DATA_POOL},
-      };
-      static_assert((RBD_FEATURE_DATA_POOL << 1) > RBD_FEATURES_ALL,
-                    "new RBD feature added");
-
-      // convert user-friendly comma delimited feature name list to a bitmask
-      // that is used by the librbd API
-      uint64_t features = 0;
-      error_message->clear();
-
-      try {
-        features = boost::lexical_cast<decltype(features)>(*value);
-
-        uint64_t unsupported_features = (features & ~RBD_FEATURES_ALL);
-        if (unsupported_features != 0ull) {
-          features &= RBD_FEATURES_ALL;
-
-          std::stringstream ss;
-          ss << "ignoring unknown feature mask 0x"
-             << std::hex << unsupported_features;
-          *error_message = ss.str();
-        }
-      } catch (const boost::bad_lexical_cast& ) {
-        int r = 0;
-        std::vector<std::string> feature_names;
-        boost::split(feature_names, *value, boost::is_any_of(","));
-        for (auto feature_name: feature_names) {
-          boost::trim(feature_name);
-          auto feature_it = FEATURE_MAP.find(feature_name);
-          if (feature_it != FEATURE_MAP.end()) {
-            features += feature_it->second;
-          } else {
-            if (!error_message->empty()) {
-              *error_message += ", ";
-            }
-            *error_message += "ignoring unknown feature " + feature_name;
-            r = -EINVAL;
-          }
-        }
-
-        if (features == 0 && r == -EINVAL) {
-          features = RBD_FEATURES_DEFAULT;
-        }
-      }
-      *value = stringify(features);
-      return 0;
-    }),
+    .set_validator([](std::string *value, std::string *error_message) {
+	ostringstream ss;
+	uint64_t features = librbd::rbd_features_from_string(*value, &ss);
+	// Leave this in integer form to avoid breaking Cinder.  Someday
+	// we would like to present this in string form instead...
+	*value = stringify(features);
+	if (ss.str().size()) {
+	  return -EINVAL;
+	}
+	return 0;
+      }),
 
     Option("rbd_op_threads", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(1)
@@ -5743,7 +5928,7 @@ static std::vector<Option> get_rbd_options() {
     .set_description("threshold for issuing a sparse-read")
     .set_long_description("minimum number of sequential bytes to read against "
                           "an object before issuing a sparse-read request to "
-                          "the cluster. 0 implies it must be a full object read"
+                          "the cluster. 0 implies it must be a full object read "
                           "to issue a sparse-read, 1 implies always use "
                           "sparse-read, and any value larger than the maximum "
                           "object size will disable sparse-read for all "
@@ -5809,6 +5994,10 @@ static std::vector<Option> get_rbd_options() {
     .set_default(false)
     .set_description("automatically start image resync after mirroring is disconnected due to being laggy"),
 
+    Option("rbd_mirroring_delete_delay", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    .set_default(0)
+    .set_description("time-delay in seconds for rbd-mirror delete propagation"),
+
     Option("rbd_mirroring_replay_delay", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(0)
     .set_description("time-delay in seconds for rbd-mirror asynchronous replication"),
@@ -5832,6 +6021,22 @@ static std::vector<Option> get_rbd_options() {
     Option("rbd_default_map_options", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_default("")
     .set_description("default krbd map options"),
+
+    Option("rbd_default_clone_format", Option::TYPE_STR, Option::LEVEL_ADVANCED)
+    .set_enum_allowed({"1", "2", "auto"})
+    .set_default("auto")
+    .set_description("default internal format for handling clones")
+    .set_long_description("This sets the internal format for tracking cloned "
+                          "images. The setting of '1' requires attaching to "
+                          "protected snapshots that cannot be removed until "
+                          "the clone is removed/flattened. The setting of '2' "
+                          "will allow clones to be attached to any snapshot "
+                          "and permits removing in-use parent snapshots but "
+                          "requires Mimic or later clients. The default "
+                          "setting of 'auto' will use the v2 format if the "
+                          "cluster is configured to require mimic or later "
+                          "clients.")
+    .set_safe(),
 
     Option("rbd_journal_order", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_min(12)
@@ -5949,15 +6154,11 @@ std::vector<Option> get_mds_options() {
   return std::vector<Option>({
     Option("mds_data", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_default("/var/lib/ceph/mds/$cluster-$id")
-    .set_description(""),
-
-    Option("mds_max_file_size", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
-    .set_default(1ULL << 40)
-    .set_description(""),
+    .set_description("path to MDS data and keyring"),
 
     Option("mds_max_xattr_pairs_size", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(64_K)
-    .set_description(""),
+    .set_description("maximum aggregate size of extended attributes on a file"),
 
     Option("mds_cache_size", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(0)
@@ -5971,7 +6172,7 @@ std::vector<Option> get_mds_options() {
 
     Option("mds_cache_reservation", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(.05)
-    .set_description("amount of memory to reserve"),
+    .set_description("amount of memory to reserve for future cached objects"),
 
     Option("mds_health_cache_threshold", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(1.5)
@@ -5979,245 +6180,234 @@ std::vector<Option> get_mds_options() {
 
     Option("mds_cache_mid", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(.7)
-    .set_description(""),
+    .set_description("midpoint for MDS cache LRU"),
 
     Option("mds_max_file_recover", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(32)
-    .set_description(""),
+    .set_description("maximum number of files to recover file sizes in parallel"),
 
     Option("mds_dir_max_commit_size", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(10)
-    .set_description(""),
+    .set_description("maximum size in megabytes for a RADOS write to a directory"),
 
     Option("mds_dir_keys_per_op", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(16384)
-    .set_description(""),
+    .set_description("number of directory entries to read in one RADOS operation"),
 
     Option("mds_decay_halflife", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(5)
-    .set_description(""),
+    .set_description("rate of decay for temperature counters on each directory for balancing"),
 
     Option("mds_beacon_interval", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(4)
-    .set_description(""),
+    .set_description("interval in seconds between MDS beacons to monitors"),
 
     Option("mds_beacon_grace", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(15)
-    .set_description(""),
+    .set_description("tolerance in seconds for missed beacons from monitors"),
 
     Option("mds_enforce_unique_name", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(true)
-    .set_description(""),
-
-    Option("mds_session_timeout", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(60)
-    .set_description(""),
+    .set_description("require MDS name is unique in the cluster"),
 
     Option("mds_session_blacklist_on_timeout", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(true)
-    .set_description(""),
+    .set_description("blacklist clients whose sessions have become stale"),
 
     Option("mds_session_blacklist_on_evict", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(true)
-    .set_description(""),
+    .set_description("blacklist clients that have been evicted"),
 
     Option("mds_sessionmap_keys_per_op", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(1024)
-    .set_description(""),
+    .set_description("number of omap keys to read from the SessionMap in one operation"),
 
     Option("mds_recall_state_timeout", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(60)
-    .set_description(""),
+    .set_description("timeout for clients late on cap recall to create health warnings"),
 
-    Option("mds_freeze_tree_timeout", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    Option("mds_freeze_tree_timeout", Option::TYPE_FLOAT, Option::LEVEL_DEV)
     .set_default(30)
-    .set_description(""),
-
-    Option("mds_session_autoclose", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
-    .set_default(300)
     .set_description(""),
 
     Option("mds_health_summarize_threshold", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(10)
-    .set_description(""),
+    .set_description("threshold of number of clients to summarize late client recall"),
 
     Option("mds_reconnect_timeout", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(45)
-    .set_description(""),
+    .set_description("timeout in seconds to wait for clients to reconnect during MDS reconnect recovery state"),
 
     Option("mds_tick_interval", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(5)
-    .set_description(""),
+    .set_description("time in seconds between upkeep tasks"),
 
-    Option("mds_dirstat_min_interval", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    Option("mds_dirstat_min_interval", Option::TYPE_FLOAT, Option::LEVEL_DEV)
     .set_default(1)
     .set_description(""),
 
     Option("mds_scatter_nudge_interval", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(5)
-    .set_description(""),
+    .set_description("minimum interval between scatter lock updates"),
 
     Option("mds_client_prealloc_inos", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(1000)
-    .set_description(""),
+    .set_description("number of unused inodes to pre-allocate to clients for file creation"),
 
     Option("mds_early_reply", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(true)
-    .set_description(""),
+    .set_description("additional reply to clients that metadata requests are complete but not yet durable"),
 
     Option("mds_default_dir_hash", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(CEPH_STR_HASH_RJENKINS)
-    .set_description(""),
+    .set_description("hash function to select directory fragment for dentry name"),
 
-    Option("mds_log_pause", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    Option("mds_log_pause", Option::TYPE_BOOL, Option::LEVEL_DEV)
     .set_default(false)
     .set_description(""),
 
-    Option("mds_log_skip_corrupt_events", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    Option("mds_log_skip_corrupt_events", Option::TYPE_BOOL, Option::LEVEL_DEV)
     .set_default(false)
     .set_description(""),
 
     Option("mds_log_max_events", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(-1)
-    .set_description(""),
+    .set_description("maximum number of events in the MDS journal (-1 is unlimited)"),
 
     Option("mds_log_events_per_segment", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(1024)
-    .set_description(""),
+    .set_description("maximum number of events in an MDS journal segment"),
 
     Option("mds_log_segment_size", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(0)
-    .set_description(""),
+    .set_description("size in bytes of each MDS log segment"),
 
     Option("mds_log_max_segments", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(30)
-    .set_description(""),
+    .set_description("maximum number of segments which may be untrimmed"),
 
     Option("mds_bal_export_pin", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(true)
-    .set_description(""),
+    .set_description("allow setting directory export pins to particular ranks"),
 
     Option("mds_bal_sample_interval", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(3.0)
-    .set_description(""),
+    .set_description("interval in seconds between balancer ticks"),
 
     Option("mds_bal_replicate_threshold", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(8000)
-    .set_description(""),
+    .set_description("hot popularity threshold to replicate a subtree"),
 
     Option("mds_bal_unreplicate_threshold", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0)
-    .set_description(""),
-
-    Option("mds_bal_frag", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
-    .set_default(true)
-    .set_description(""),
+    .set_description("cold popularity threshold to merge subtrees"),
 
     Option("mds_bal_split_size", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(10000)
-    .set_description(""),
+    .set_description("minimum size of directory fragment before splitting"),
 
     Option("mds_bal_split_rd", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(25000)
-    .set_description(""),
+    .set_description("hot read popularity threshold for splitting a directory fragment"),
 
     Option("mds_bal_split_wr", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(10000)
-    .set_description(""),
+    .set_description("hot write popularity threshold for splitting a directory fragment"),
 
     Option("mds_bal_split_bits", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(3)
-    .set_description(""),
+    .set_min_max(1, 24)
+    .set_description("power of two child fragments for a fragment on split"),
 
     Option("mds_bal_merge_size", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(50)
-    .set_description(""),
+    .set_description("size of fragments where merging should occur"),
 
     Option("mds_bal_interval", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(10)
-    .set_description(""),
+    .set_description("interval between MDS balancer cycles"),
 
     Option("mds_bal_fragment_interval", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(5)
-    .set_description(""),
+    .set_description("delay in seconds before interrupting client IO to perform splits"),
 
     Option("mds_bal_fragment_size_max", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(10000*10)
-    .set_description(""),
+    .set_description("maximum size of a directory fragment before new creat/links fail"),
 
     Option("mds_bal_fragment_fast_factor", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(1.5)
-    .set_description(""),
+    .set_description("ratio of mds_bal_split_size at which fast fragment splitting occurs"),
 
     Option("mds_bal_idle_threshold", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0)
-    .set_description(""),
+    .set_description("idle metadata popularity threshold before rebalancing"),
 
-    Option("mds_bal_max", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    Option("mds_bal_max", Option::TYPE_INT, Option::LEVEL_DEV)
     .set_default(-1)
     .set_description(""),
 
-    Option("mds_bal_max_until", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    Option("mds_bal_max_until", Option::TYPE_INT, Option::LEVEL_DEV)
     .set_default(-1)
     .set_description(""),
 
-    Option("mds_bal_mode", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    Option("mds_bal_mode", Option::TYPE_INT, Option::LEVEL_DEV)
     .set_default(0)
     .set_description(""),
 
-    Option("mds_bal_min_rebalance", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    Option("mds_bal_min_rebalance", Option::TYPE_FLOAT, Option::LEVEL_DEV)
     .set_default(.1)
-    .set_description(""),
+    .set_description("amount overloaded over internal target before balancer begins offloading"),
 
-    Option("mds_bal_min_start", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    Option("mds_bal_min_start", Option::TYPE_FLOAT, Option::LEVEL_DEV)
     .set_default(.2)
     .set_description(""),
 
-    Option("mds_bal_need_min", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    Option("mds_bal_need_min", Option::TYPE_FLOAT, Option::LEVEL_DEV)
     .set_default(.8)
     .set_description(""),
 
-    Option("mds_bal_need_max", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    Option("mds_bal_need_max", Option::TYPE_FLOAT, Option::LEVEL_DEV)
     .set_default(1.2)
     .set_description(""),
 
-    Option("mds_bal_midchunk", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    Option("mds_bal_midchunk", Option::TYPE_FLOAT, Option::LEVEL_DEV)
     .set_default(.3)
     .set_description(""),
 
-    Option("mds_bal_minchunk", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    Option("mds_bal_minchunk", Option::TYPE_FLOAT, Option::LEVEL_DEV)
     .set_default(.001)
     .set_description(""),
 
     Option("mds_bal_target_decay", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(10.0)
-    .set_description(""),
+    .set_description("rate of decay for export targets communicated to clients"),
 
     Option("mds_replay_interval", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(1.0)
-    .set_description(""),
+    .set_description("time in seconds between replay of updates to journal by standby replay MDS"),
 
-    Option("mds_shutdown_check", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    Option("mds_shutdown_check", Option::TYPE_INT, Option::LEVEL_DEV)
     .set_default(0)
     .set_description(""),
 
-    Option("mds_thrash_exports", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    Option("mds_thrash_exports", Option::TYPE_INT, Option::LEVEL_DEV)
     .set_default(0)
     .set_description(""),
 
-    Option("mds_thrash_fragments", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    Option("mds_thrash_fragments", Option::TYPE_INT, Option::LEVEL_DEV)
     .set_default(0)
     .set_description(""),
 
-    Option("mds_dump_cache_on_map", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    Option("mds_dump_cache_on_map", Option::TYPE_BOOL, Option::LEVEL_DEV)
     .set_default(false)
     .set_description(""),
 
-    Option("mds_dump_cache_after_rejoin", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    Option("mds_dump_cache_after_rejoin", Option::TYPE_BOOL, Option::LEVEL_DEV)
     .set_default(false)
     .set_description(""),
 
-    Option("mds_verify_scatter", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    Option("mds_verify_scatter", Option::TYPE_BOOL, Option::LEVEL_DEV)
     .set_default(false)
     .set_description(""),
 
@@ -6277,7 +6467,7 @@ std::vector<Option> get_mds_options() {
     .set_default(0)
     .set_description(""),
 
-    Option("mds_journal_format", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    Option("mds_journal_format", Option::TYPE_UINT, Option::LEVEL_DEV)
     .set_default(1)
     .set_description(""),
 
@@ -6289,129 +6479,132 @@ std::vector<Option> get_mds_options() {
     .set_default(0)
     .set_description(""),
 
-    Option("mds_wipe_sessions", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    Option("mds_wipe_sessions", Option::TYPE_BOOL, Option::LEVEL_DEV)
     .set_default(0)
     .set_description(""),
 
-    Option("mds_wipe_ino_prealloc", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    Option("mds_wipe_ino_prealloc", Option::TYPE_BOOL, Option::LEVEL_DEV)
     .set_default(0)
     .set_description(""),
 
-    Option("mds_skip_ino", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    Option("mds_skip_ino", Option::TYPE_INT, Option::LEVEL_DEV)
     .set_default(0)
     .set_description(""),
 
     Option("mds_standby_for_name", Option::TYPE_STR, Option::LEVEL_ADVANCED)
     .set_default("")
-    .set_description(""),
+    .set_description("standby for named MDS daemon when not active"),
 
-    Option("mds_standby_for_rank", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    Option("mds_standby_for_rank", Option::TYPE_INT, Option::LEVEL_BASIC)
     .set_default(-1)
-    .set_description(""),
+    .set_description("allow MDS to become a standby:replay daemon"),
 
     Option("mds_standby_for_fscid", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(-1)
-    .set_description(""),
+    .set_description("standby only for the file system with the given fscid"),
 
-    Option("mds_standby_replay", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+    Option("mds_standby_replay", Option::TYPE_BOOL, Option::LEVEL_BASIC)
     .set_default(false)
-    .set_description(""),
+    .set_description("allow MDS to standby replay for an active MDS"),
 
     Option("mds_enable_op_tracker", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(true)
-    .set_description(""),
+    .set_description("track remote operation progression and statistics"),
 
     Option("mds_op_history_size", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(20)
-    .set_description(""),
+    .set_description("maximum size for list of historical operations"),
 
     Option("mds_op_history_duration", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(600)
-    .set_description(""),
+    .set_description("expiration time in seconds of historical operations"),
 
     Option("mds_op_complaint_time", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(30)
-    .set_description(""),
+    .set_description("time in seconds to consider an operation blocked after no updates"),
 
-    Option("mds_op_log_threshold", Option::TYPE_INT, Option::LEVEL_ADVANCED)
+    Option("mds_op_log_threshold", Option::TYPE_INT, Option::LEVEL_DEV)
     .set_default(5)
     .set_description(""),
 
     Option("mds_snap_min_uid", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(0)
-    .set_description(""),
+    .set_description("minimum uid of client to perform snapshots"),
 
     Option("mds_snap_max_uid", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(4294967294)
-    .set_description(""),
+    .set_description("maximum uid of client to perform snapshots"),
 
     Option("mds_snap_rstat", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
     .set_default(false)
-    .set_description(""),
+    .set_description("enabled nested rstat for snapshots"),
 
-    Option("mds_verify_backtrace", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    Option("mds_verify_backtrace", Option::TYPE_UINT, Option::LEVEL_DEV)
     .set_default(1)
     .set_description(""),
 
-    Option("mds_max_completed_flushes", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    Option("mds_max_completed_flushes", Option::TYPE_UINT, Option::LEVEL_DEV)
     .set_default(100000)
     .set_description(""),
 
-    Option("mds_max_completed_requests", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
+    Option("mds_max_completed_requests", Option::TYPE_UINT, Option::LEVEL_DEV)
     .set_default(100000)
     .set_description(""),
 
     Option("mds_action_on_write_error", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(1)
-    .set_description(""),
+    .set_description("action to take when MDS cannot write to RADOS (0:ignore, 1:read-only, 2:suicide)"),
 
     Option("mds_mon_shutdown_timeout", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(5)
-    .set_description(""),
+    .set_description("time to wait for mon to receive damaged MDS rank notification"),
 
     Option("mds_max_purge_files", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(64)
-    .set_description(""),
+    .set_description("maximum number of deleted files to purge in parallel"),
 
     Option("mds_max_purge_ops", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(8192)
-    .set_description(""),
+    .set_description("maximum number of purge operations performed in parallel"),
 
     Option("mds_max_purge_ops_per_pg", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
     .set_default(0.5)
-    .set_description(""),
+    .set_description("number of parallel purge operations performed per PG"),
 
-    Option("mds_purge_queue_busy_flush_period", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    Option("mds_purge_queue_busy_flush_period", Option::TYPE_FLOAT, Option::LEVEL_DEV)
     .set_default(1.0)
     .set_description(""),
 
     Option("mds_root_ino_uid", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(0)
-    .set_description(""),
+    .set_description("default uid for new root directory"),
 
     Option("mds_root_ino_gid", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(0)
-    .set_description(""),
+    .set_description("default gid for new root directory"),
 
     Option("mds_max_scrub_ops_in_progress", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(5)
-    .set_description(""),
+    .set_description("maximum number of scrub operations performed in parallel"),
 
     Option("mds_damage_table_max_entries", Option::TYPE_INT, Option::LEVEL_ADVANCED)
     .set_default(10000)
-    .set_description(""),
+    .set_description("maximum number of damage table entries"),
 
     Option("mds_client_writeable_range_max_inc_objs", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(1024)
-    .set_description(""),
+    .set_description("maximum number of objects in writeable range of a file for a client"),
  
     Option("mds_min_caps_per_client", Option::TYPE_UINT, Option::LEVEL_ADVANCED)
     .set_default(100)
     .set_description("minimum number of capabilities a client may hold"),
 
-    Option("mds_max_ratio_caps_per_client", Option::TYPE_FLOAT, Option::LEVEL_ADVANCED)
+    Option("mds_max_ratio_caps_per_client", Option::TYPE_FLOAT, Option::LEVEL_DEV)
     .set_default(.8)
     .set_description("maximum ratio of current caps that may be recalled during MDS cache pressure"),
+    Option("mds_hack_allow_loading_invalid_metadata", Option::TYPE_BOOL, Option::LEVEL_ADVANCED)
+     .set_default(0)
+     .set_description("INTENTIONALLY CAUSE DATA LOSS by bypasing checks for invalid metadata on disk. Allows testing repair tools."),
   });
 }
 

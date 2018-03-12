@@ -32,33 +32,33 @@ void PGMapDigest::encode(bufferlist& bl, uint64_t features) const
     v = 1;
   }
   ENCODE_START(v, 1, bl);
-  ::encode(num_pg, bl);
-  ::encode(num_pg_active, bl);
-  ::encode(num_pg_unknown, bl);
-  ::encode(num_osd, bl);
-  ::encode(pg_pool_sum, bl, features);
-  ::encode(pg_sum, bl, features);
-  ::encode(osd_sum, bl);
+  encode(num_pg, bl);
+  encode(num_pg_active, bl);
+  encode(num_pg_unknown, bl);
+  encode(num_osd, bl);
+  encode(pg_pool_sum, bl, features);
+  encode(pg_sum, bl, features);
+  encode(osd_sum, bl, features);
   if (v >= 2) {
-    ::encode(num_pg_by_state, bl);
+    encode(num_pg_by_state, bl);
   } else {
     uint32_t n = num_pg_by_state.size();
-    ::encode(n, bl);
+    encode(n, bl);
     for (auto p : num_pg_by_state) {
-      ::encode((uint32_t)p.first, bl);
-      ::encode(p.second, bl);
+      encode((uint32_t)p.first, bl);
+      encode(p.second, bl);
     }
   }
-  ::encode(num_pg_by_osd, bl);
-  ::encode(num_pg_by_pool, bl);
-  ::encode(osd_last_seq, bl);
-  ::encode(per_pool_sum_delta, bl, features);
-  ::encode(per_pool_sum_deltas_stamps, bl);
-  ::encode(pg_sum_delta, bl, features);
-  ::encode(stamp_delta, bl);
-  ::encode(avail_space_by_rule, bl);
+  encode(num_pg_by_osd, bl);
+  encode(num_pg_by_pool, bl);
+  encode(osd_last_seq, bl);
+  encode(per_pool_sum_delta, bl, features);
+  encode(per_pool_sum_deltas_stamps, bl);
+  encode(pg_sum_delta, bl, features);
+  encode(stamp_delta, bl);
+  encode(avail_space_by_rule, bl);
   if (struct_v >= 3) {
-    ::encode(purged_snaps, bl);
+    encode(purged_snaps, bl);
   }
   ENCODE_FINISH(bl);
 }
@@ -66,32 +66,32 @@ void PGMapDigest::encode(bufferlist& bl, uint64_t features) const
 void PGMapDigest::decode(bufferlist::iterator& p)
 {
   DECODE_START(3, p);
-  ::decode(num_pg, p);
-  ::decode(num_pg_active, p);
-  ::decode(num_pg_unknown, p);
-  ::decode(num_osd, p);
-  ::decode(pg_pool_sum, p);
-  ::decode(pg_sum, p);
-  ::decode(osd_sum, p);
+  decode(num_pg, p);
+  decode(num_pg_active, p);
+  decode(num_pg_unknown, p);
+  decode(num_osd, p);
+  decode(pg_pool_sum, p);
+  decode(pg_sum, p);
+  decode(osd_sum, p);
   if (struct_v >= 2) {
-    ::decode(num_pg_by_state, p);
+    decode(num_pg_by_state, p);
   } else {
     map<int32_t, int32_t> nps;
-    ::decode(nps, p);
+    decode(nps, p);
     for (auto i : nps) {
       num_pg_by_state[i.first] = i.second;
     }
   }
-  ::decode(num_pg_by_osd, p);
-  ::decode(num_pg_by_pool, p);
-  ::decode(osd_last_seq, p);
-  ::decode(per_pool_sum_delta, p);
-  ::decode(per_pool_sum_deltas_stamps, p);
-  ::decode(pg_sum_delta, p);
-  ::decode(stamp_delta, p);
-  ::decode(avail_space_by_rule, p);
+  decode(num_pg_by_osd, p);
+  decode(num_pg_by_pool, p);
+  decode(osd_last_seq, p);
+  decode(per_pool_sum_delta, p);
+  decode(per_pool_sum_deltas_stamps, p);
+  decode(pg_sum_delta, p);
+  decode(stamp_delta, p);
+  decode(avail_space_by_rule, p);
   if (struct_v >= 3) {
-    ::decode(purged_snaps, p);
+    decode(purged_snaps, p);
   }
   DECODE_FINISH(p);
 }
@@ -273,7 +273,7 @@ void PGMapDigest::print_summary(Formatter *f, ostream *out) const
     {
       std::stringstream ss;
       ss << p->first;
-      max_width = MAX(ss.str().size(), max_width);
+      max_width = std::max<size_t>(ss.str().size(), max_width);
     }
 
     for (multimap<int,int>::reverse_iterator p = state_by_count.rbegin();
@@ -392,53 +392,53 @@ void PGMapDigest::print_oneline_summary(Formatter *f, ostream *out) const
 }
 
 void PGMapDigest::recovery_summary(Formatter *f, list<string> *psl,
-                             const pool_stat_t& delta_sum) const
+                             const pool_stat_t& pool_sum) const
 {
-  if (delta_sum.stats.sum.num_objects_degraded && delta_sum.stats.sum.num_object_copies > 0) {
-    double pc = (double)delta_sum.stats.sum.num_objects_degraded /
-                (double)delta_sum.stats.sum.num_object_copies * (double)100.0;
+  if (pool_sum.stats.sum.num_objects_degraded && pool_sum.stats.sum.num_object_copies > 0) {
+    double pc = (double)pool_sum.stats.sum.num_objects_degraded /
+                (double)pool_sum.stats.sum.num_object_copies * (double)100.0;
     char b[20];
     snprintf(b, sizeof(b), "%.3lf", pc);
     if (f) {
-      f->dump_unsigned("degraded_objects", delta_sum.stats.sum.num_objects_degraded);
-      f->dump_unsigned("degraded_total", delta_sum.stats.sum.num_object_copies);
+      f->dump_unsigned("degraded_objects", pool_sum.stats.sum.num_objects_degraded);
+      f->dump_unsigned("degraded_total", pool_sum.stats.sum.num_object_copies);
       f->dump_float("degraded_ratio", pc / 100.0);
     } else {
       ostringstream ss;
-      ss << delta_sum.stats.sum.num_objects_degraded
-         << "/" << delta_sum.stats.sum.num_object_copies << " objects degraded (" << b << "%)";
+      ss << pool_sum.stats.sum.num_objects_degraded
+         << "/" << pool_sum.stats.sum.num_object_copies << " objects degraded (" << b << "%)";
       psl->push_back(ss.str());
     }
   }
-  if (delta_sum.stats.sum.num_objects_misplaced && delta_sum.stats.sum.num_object_copies > 0) {
-    double pc = (double)delta_sum.stats.sum.num_objects_misplaced /
-                (double)delta_sum.stats.sum.num_object_copies * (double)100.0;
+  if (pool_sum.stats.sum.num_objects_misplaced && pool_sum.stats.sum.num_object_copies > 0) {
+    double pc = (double)pool_sum.stats.sum.num_objects_misplaced /
+                (double)pool_sum.stats.sum.num_object_copies * (double)100.0;
     char b[20];
     snprintf(b, sizeof(b), "%.3lf", pc);
     if (f) {
-      f->dump_unsigned("misplaced_objects", delta_sum.stats.sum.num_objects_misplaced);
-      f->dump_unsigned("misplaced_total", delta_sum.stats.sum.num_object_copies);
+      f->dump_unsigned("misplaced_objects", pool_sum.stats.sum.num_objects_misplaced);
+      f->dump_unsigned("misplaced_total", pool_sum.stats.sum.num_object_copies);
       f->dump_float("misplaced_ratio", pc / 100.0);
     } else {
       ostringstream ss;
-      ss << delta_sum.stats.sum.num_objects_misplaced
-         << "/" << delta_sum.stats.sum.num_object_copies << " objects misplaced (" << b << "%)";
+      ss << pool_sum.stats.sum.num_objects_misplaced
+         << "/" << pool_sum.stats.sum.num_object_copies << " objects misplaced (" << b << "%)";
       psl->push_back(ss.str());
     }
   }
-  if (delta_sum.stats.sum.num_objects_unfound && delta_sum.stats.sum.num_objects) {
-    double pc = (double)delta_sum.stats.sum.num_objects_unfound /
-                (double)delta_sum.stats.sum.num_objects * (double)100.0;
+  if (pool_sum.stats.sum.num_objects_unfound && pool_sum.stats.sum.num_objects) {
+    double pc = (double)pool_sum.stats.sum.num_objects_unfound /
+                (double)pool_sum.stats.sum.num_objects * (double)100.0;
     char b[20];
     snprintf(b, sizeof(b), "%.3lf", pc);
     if (f) {
-      f->dump_unsigned("unfound_objects", delta_sum.stats.sum.num_objects_unfound);
-      f->dump_unsigned("unfound_total", delta_sum.stats.sum.num_objects);
+      f->dump_unsigned("unfound_objects", pool_sum.stats.sum.num_objects_unfound);
+      f->dump_unsigned("unfound_total", pool_sum.stats.sum.num_objects);
       f->dump_float("unfound_ratio", pc / 100.0);
     } else {
       ostringstream ss;
-      ss << delta_sum.stats.sum.num_objects_unfound
-         << "/" << delta_sum.stats.sum.num_objects << " objects unfound (" << b << "%)";
+      ss << pool_sum.stats.sum.num_objects_unfound
+         << "/" << pool_sum.stats.sum.num_objects << " objects unfound (" << b << "%)";
       psl->push_back(ss.str());
     }
   }
@@ -500,11 +500,11 @@ void PGMapDigest::pool_recovery_rate_summary(Formatter *f, ostream *out,
 void PGMapDigest::pool_recovery_summary(Formatter *f, list<string> *psl,
                                   uint64_t poolid) const
 {
-  auto p = per_pool_sum_delta.find(poolid);
-  if (p == per_pool_sum_delta.end())
+  auto p = pg_pool_sum.find(poolid);
+  if (p == pg_pool_sum.end())
     return;
 
-  recovery_summary(f, psl, p->second.first);
+  recovery_summary(f, psl, p->second);
 }
 
 void PGMapDigest::client_io_rate_summary(Formatter *f, ostream *out,
@@ -875,9 +875,9 @@ void PGMapDigest::dump_object_stat_sum(
   }
 
   if (f) {
-    f->dump_int("kb_used", SHIFT_ROUND_UP(sum.num_bytes, 10));
+    f->dump_int("kb_used", shift_round_up(sum.num_bytes, 10));
     f->dump_int("bytes_used", sum.num_bytes);
-    f->dump_format_unquoted("percent_used", "%.2f", (used*100));
+    f->dump_float("percent_used", used);
     f->dump_unsigned("max_avail", avail / raw_used_rate);
     f->dump_int("objects", sum.num_objects);
     if (verbose) {
@@ -946,7 +946,7 @@ int64_t PGMap::get_rule_avail(const OSDMap& osdmap, int ruleno) const
       }
       double unusable = (double)osd_info->second.kb *
 	(1.0 - fratio);
-      double avail = MAX(0.0, (double)osd_info->second.kb_avail - unusable);
+      double avail = std::max(0.0, (double)osd_info->second.kb_avail - unusable);
       avail *= 1024.0;
       int64_t proj = (int64_t)(avail / (double)p->second);
       if (min < 0 || proj < min) {
@@ -1338,24 +1338,24 @@ void PGMap::encode_digest(const OSDMap& osdmap,
 void PGMap::encode(bufferlist &bl, uint64_t features) const
 {
   ENCODE_START(7, 7, bl);
-  ::encode(version, bl);
-  ::encode(pg_stat, bl);
-  ::encode(osd_stat, bl);
-  ::encode(last_osdmap_epoch, bl);
-  ::encode(last_pg_scan, bl);
-  ::encode(stamp, bl);
+  encode(version, bl);
+  encode(pg_stat, bl);
+  encode(osd_stat, bl, features);
+  encode(last_osdmap_epoch, bl);
+  encode(last_pg_scan, bl);
+  encode(stamp, bl);
   ENCODE_FINISH(bl);
 }
 
 void PGMap::decode(bufferlist::iterator &bl)
 {
   DECODE_START(7, bl);
-  ::decode(version, bl);
-  ::decode(pg_stat, bl);
-  ::decode(osd_stat, bl);
-  ::decode(last_osdmap_epoch, bl);
-  ::decode(last_pg_scan, bl);
-  ::decode(stamp, bl);
+  decode(version, bl);
+  decode(pg_stat, bl);
+  decode(osd_stat, bl);
+  decode(last_osdmap_epoch, bl);
+  decode(last_pg_scan, bl);
+  decode(stamp, bl);
   DECODE_FINISH(bl);
 
   calc_stats();
@@ -1479,6 +1479,7 @@ void PGMap::dump_pg_stats_plain(
     tab.define_column("SCRUB_STAMP", TextTable::LEFT, TextTable::RIGHT);
     tab.define_column("LAST_DEEP_SCRUB", TextTable::LEFT, TextTable::RIGHT);
     tab.define_column("DEEP_SCRUB_STAMP", TextTable::LEFT, TextTable::RIGHT);
+    tab.define_column("SNAPTRIMQ_LEN", TextTable::LEFT, TextTable::RIGHT);
   }
 
   for (auto i = pg_stats.begin();
@@ -1517,6 +1518,7 @@ void PGMap::dump_pg_stats_plain(
           << st.last_scrub_stamp
           << st.last_deep_scrub
           << st.last_deep_scrub_stamp
+          << st.snaptrimq_len
           << TextTable::endrow;
     }
   }
@@ -1864,8 +1866,8 @@ void PGMap::print_osd_perf_stats(std::ostream *ss) const
        i != osd_stat.end();
        ++i) {
     tab << i->first;
-    tab << i->second.os_perf_stat.os_commit_latency;
-    tab << i->second.os_perf_stat.os_apply_latency;
+    tab << i->second.os_perf_stat.os_commit_latency_ns / 1000000ull;
+    tab << i->second.os_perf_stat.os_apply_latency_ns / 1000000ull;
     tab << TextTable::endrow;
   }
   (*ss) << tab;
@@ -2666,7 +2668,9 @@ void PGMap::get_health_checks(
 
   // REQUEST_SLOW
   // REQUEST_STUCK
-  if (cct->_conf->mon_osd_warn_op_age > 0 &&
+  // SLOW_OPS unifies them in mimic.
+  if (osdmap.require_osd_release < CEPH_RELEASE_MIMIC &&
+      cct->_conf->mon_osd_warn_op_age > 0 &&
       !osd_sum.op_queue_age_hist.h.empty() &&
       osd_sum.op_queue_age_hist.upper_bound() / 1000.0 >
       cct->_conf->mon_osd_warn_op_age) {
@@ -2873,11 +2877,55 @@ void PGMap::get_health_checks(
       d.detail.swap(detail);
     }
   }
+
+  // PG_SLOW_SNAP_TRIMMING
+  if (!pg_stat.empty() && cct->_conf->mon_osd_snap_trim_queue_warn_on > 0) {
+    uint32_t snapthreshold = cct->_conf->mon_osd_snap_trim_queue_warn_on;
+    uint64_t snaptrimq_exceeded = 0;
+    uint32_t longest_queue = 0;
+    const pg_t* longest_q_pg = nullptr;
+    list<string> detail;
+
+    for (auto& i: pg_stat) {
+      uint32_t current_len = i.second.snaptrimq_len;
+      if (current_len >= snapthreshold) {
+        snaptrimq_exceeded++;
+        if (longest_queue <= current_len) {
+          longest_q_pg = &i.first;
+          longest_queue = current_len;
+        }
+        if (detail.size() < max - 1) {
+          stringstream ss;
+          ss << "snap trim queue for pg " << i.first << " at " << current_len;
+          detail.push_back(ss.str());
+          continue;
+        }
+        if (detail.size() < max) {
+          detail.push_back("...more pgs affected");
+          continue;
+        }
+      }
+    }
+
+    if (snaptrimq_exceeded) {
+      {
+         ostringstream ss;
+         ss << "longest queue on pg " << *longest_q_pg << " at " << longest_queue;
+         detail.push_back(ss.str());
+      }
+
+      stringstream ss;
+      ss << "snap trim queue for " << snaptrimq_exceeded << " pg(s) >= " << snapthreshold << " (mon_osd_snap_trim_queue_warn_on)";
+      auto& d = checks->add("PG_SLOW_SNAP_TRIMMING", HEALTH_WARN, ss.str());
+      detail.push_back("try decreasing \"osd snap trim sleep\" and/or increasing \"osd pg max concurrent snap trims\".");
+      d.detail.swap(detail);
+    }
+  }
 }
 
 int process_pg_map_command(
   const string& orig_prefix,
-  const map<string,cmd_vartype>& orig_cmdmap,
+  const cmdmap_t& orig_cmdmap,
   const PGMap& pg_map,
   const OSDMap& osdmap,
   Formatter *f,
@@ -2885,7 +2933,7 @@ int process_pg_map_command(
   bufferlist *odata)
 {
   string prefix = orig_prefix;
-  map<string,cmd_vartype> cmdmap = orig_cmdmap;
+  auto cmdmap = orig_cmdmap;
 
   // perhaps these would be better in the parsing, but it's weird
   bool primary = false;
@@ -3458,7 +3506,7 @@ int reweight::by_utilization(
     average_util = (double)num_pg_copies / weight_sum;
   } else {
     // by osd utilization
-    int num_osd = MAX(1, pgm.osd_stat.size());
+    int num_osd = std::max<size_t>(1, pgm.osd_stat.size());
     if ((uint64_t)pgm.osd_sum.kb * 1024 / num_osd
 	< g_conf->mon_reweight_min_bytes_per_osd) {
       *ss << "Refusing to reweight: we only have " << pgm.osd_sum.kb
@@ -3551,7 +3599,7 @@ int reweight::by_utilization(
       // to represent e.g. differing storage capacities
       unsigned new_weight = (unsigned)((average_util / util) * (float)weight);
       if (weight > max_change)
-	new_weight = MAX(new_weight, weight - max_change);
+	new_weight = std::max(new_weight, weight - max_change);
       new_weights->insert({p.first, new_weight});
       if (f) {
 	f->open_object_section("osd");
@@ -3570,7 +3618,7 @@ int reweight::by_utilization(
     if (!no_increasing && util <= underload_util) {
       // assign a higher weight.. if we can.
       unsigned new_weight = (unsigned)((average_util / util) * (float)weight);
-      new_weight = MIN(new_weight, weight + max_change);
+      new_weight = std::min(new_weight, weight + max_change);
       if (new_weight > 0x10000)
 	new_weight = 0x10000;
       if (new_weight > weight) {

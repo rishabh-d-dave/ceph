@@ -226,8 +226,8 @@ class AdminHook : public AdminSocketHook {
   Monitor *mon;
 public:
   explicit AdminHook(Monitor *m) : mon(m) {}
-  bool call(std::string command, cmdmap_t& cmdmap, std::string format,
-	    bufferlist& out) override {
+  bool call(std::string_view command, const cmdmap_t& cmdmap,
+	    std::string_view format, bufferlist& out) override {
     stringstream ss;
     mon->do_admin_command(command, cmdmap, format, ss);
     out.append(ss);
@@ -235,15 +235,15 @@ public:
   }
 };
 
-void Monitor::do_admin_command(string command, cmdmap_t& cmdmap, string format,
-			       ostream& ss)
+void Monitor::do_admin_command(std::string_view command, const cmdmap_t& cmdmap,
+			       std::string_view format, std::ostream& ss)
 {
   Mutex::Locker l(lock);
 
   boost::scoped_ptr<Formatter> f(Formatter::create(format));
 
   string args;
-  for (cmdmap_t::iterator p = cmdmap.begin();
+  for (auto p = cmdmap.begin();
        p != cmdmap.end(); ++p) {
     if (p->first == "prefix")
       continue;
@@ -582,9 +582,9 @@ int Monitor::preinit()
     pcb.add_u64(l_cluster_num_osd_up, "num_osd_up", "OSDs that are up");
     pcb.add_u64(l_cluster_num_osd_in, "num_osd_in", "OSD in state \"in\" (they are in cluster)");
     pcb.add_u64(l_cluster_osd_epoch, "osd_epoch", "Current epoch of OSD map");
-    pcb.add_u64(l_cluster_osd_bytes, "osd_bytes", "Total capacity of cluster");
-    pcb.add_u64(l_cluster_osd_bytes_used, "osd_bytes_used", "Used space");
-    pcb.add_u64(l_cluster_osd_bytes_avail, "osd_bytes_avail", "Available space");
+    pcb.add_u64(l_cluster_osd_bytes, "osd_bytes", "Total capacity of cluster", NULL, 0, unit_t(BYTES));
+    pcb.add_u64(l_cluster_osd_bytes_used, "osd_bytes_used", "Used space", NULL, 0, unit_t(BYTES));
+    pcb.add_u64(l_cluster_osd_bytes_avail, "osd_bytes_avail", "Available space", NULL, 0, unit_t(BYTES));
     pcb.add_u64(l_cluster_num_pool, "num_pool", "Pools");
     pcb.add_u64(l_cluster_num_pg, "num_pg", "Placement groups");
     pcb.add_u64(l_cluster_num_pg_active_clean, "num_pg_active_clean", "Placement groups in active+clean state");
@@ -594,7 +594,7 @@ int Monitor::preinit()
     pcb.add_u64(l_cluster_num_object_degraded, "num_object_degraded", "Degraded (missing replicas) objects");
     pcb.add_u64(l_cluster_num_object_misplaced, "num_object_misplaced", "Misplaced (wrong location in the cluster) objects");
     pcb.add_u64(l_cluster_num_object_unfound, "num_object_unfound", "Unfound objects");
-    pcb.add_u64(l_cluster_num_bytes, "num_bytes", "Size of all objects");
+    pcb.add_u64(l_cluster_num_bytes, "num_bytes", "Size of all objects", NULL, 0, unit_t(BYTES));
     cluster_logger = pcb.create_perf_counters();
   }
 
@@ -682,7 +682,7 @@ int Monitor::preinit()
         // Attempt to decode and extract keyring only if it is found.
         KeyRing keyring;
         bufferlist::iterator p = bl.begin();
-        ::decode(keyring, p);
+        decode(keyring, p);
         extract_save_mon_key(keyring);
       }
     }
@@ -809,7 +809,7 @@ void Monitor::refresh_from_paxos(bool *need_bootstrap)
   if (r >= 0) {
     try {
       bufferlist::iterator p = bl.begin();
-      ::decode(fingerprint, p);
+      decode(fingerprint, p);
     }
     catch (buffer::error& e) {
       dout(10) << __func__ << " failed to decode cluster_fingerprint" << dendl;
@@ -1006,12 +1006,14 @@ void Monitor::bootstrap()
   }
 }
 
-bool Monitor::_add_bootstrap_peer_hint(string cmd, cmdmap_t& cmdmap, ostream& ss)
+bool Monitor::_add_bootstrap_peer_hint(std::string_view cmd,
+				       const cmdmap_t& cmdmap,
+				       ostream& ss)
 {
   string addrstr;
   if (!cmd_getval(g_ceph_context, cmdmap, "addr", addrstr)) {
     ss << "unable to parse address string value '"
-         << cmd_vartype_stringify(cmdmap["addr"]) << "'";
+       << cmd_vartype_stringify(cmdmap.at("addr")) << "'";
     return false;
   }
   dout(10) << "_add_bootstrap_peer_hint '" << cmd << "' '"
@@ -1433,7 +1435,7 @@ void Monitor::handle_sync_get_chunk(MonOpRequestRef op)
     sync_providers.erase(sp.cookie);
   }
 
-  ::encode(*tx, reply->chunk_bl);
+  encode(*tx, reply->chunk_bl);
 
   m->get_connection()->send_message(reply);
 }
@@ -1951,7 +1953,7 @@ void Monitor::win_election(epoch_t epoch, set<int>& active, uint64_t features,
     // do that anyway for other reasons, though.
     MonitorDBStore::TransactionRef t = paxos->get_pending_transaction();
     bufferlist bl;
-    ::encode(m, bl);
+    encode(m, bl);
     t->put(MONITOR_STORE_PREFIX, "last_metadata", bl);
   }
 
@@ -2719,11 +2721,10 @@ void Monitor::get_cluster_status(stringstream &ss, Formatter *f)
   }
 }
 
-void Monitor::_generate_command_map(map<string,cmd_vartype>& cmdmap,
+void Monitor::_generate_command_map(cmdmap_t& cmdmap,
                                     map<string,string> &param_str_map)
 {
-  for (map<string,cmd_vartype>::const_iterator p = cmdmap.begin();
-       p != cmdmap.end(); ++p) {
+  for (auto p = cmdmap.begin(); p != cmdmap.end(); ++p) {
     if (p->first == "prefix")
       continue;
     if (p->first == "caps") {
@@ -2753,8 +2754,8 @@ const MonCommand *Monitor::_get_moncommand(
   return nullptr;
 }
 
-bool Monitor::_allowed_command(MonSession *s, string &module, string &prefix,
-                               const map<string,cmd_vartype>& cmdmap,
+bool Monitor::_allowed_command(MonSession *s, const string &module,
+			       const string &prefix, const cmdmap_t& cmdmap,
                                const map<string,string>& param_str_map,
                                const MonCommand *this_cmd) {
 
@@ -2847,7 +2848,7 @@ void Monitor::handle_command(MonOpRequestRef op)
 
   string prefix;
   vector<string> fullcmd;
-  map<string, cmd_vartype> cmdmap;
+  cmdmap_t cmdmap;
   stringstream ss, ds;
   bufferlist rdata;
   string rs;
@@ -3849,8 +3850,7 @@ void Monitor::remove_all_sessions()
   while (!session_map.sessions.empty()) {
     MonSession *s = session_map.sessions.front();
     remove_session(s);
-    if (logger)
-      logger->inc(l_mon_session_rm);
+    logger->inc(l_mon_session_rm);
   }
   if (logger)
     logger->set(l_mon_num_sessions, session_map.get_size());
@@ -4271,7 +4271,7 @@ void Monitor::handle_ping(MonOpRequestRef op)
   f->close_section();
   stringstream ss;
   f->flush(ss);
-  ::encode(ss.str(), payload);
+  encode(ss.str(), payload);
   reply->set_payload(payload);
   dout(10) << __func__ << " reply payload len " << reply->get_payload().length() << dendl;
   messenger->send_message(reply, inst);
@@ -4904,7 +4904,7 @@ void Monitor::update_mon_metadata(int from, Metadata&& m)
 
   MonitorDBStore::TransactionRef t = paxos->get_pending_transaction();
   bufferlist bl;
-  ::encode(pending_metadata, bl);
+  encode(pending_metadata, bl);
   t->put(MONITOR_STORE_PREFIX, "last_metadata", bl);
   paxos->trigger_propose();
 }
@@ -4916,7 +4916,7 @@ int Monitor::load_metadata()
   if (r)
     return r;
   bufferlist::iterator it = bl.begin();
-  ::decode(mon_metadata, it);
+  decode(mon_metadata, it);
 
   pending_metadata = mon_metadata;
   return 0;
@@ -5390,7 +5390,7 @@ void Monitor::prepare_new_fingerprint(MonitorDBStore::TransactionRef t)
   dout(10) << __func__ << " proposing cluster_fingerprint " << nf << dendl;
 
   bufferlist bl;
-  ::encode(nf, bl);
+  encode(nf, bl);
   t->put(MONITOR_NAME, "cluster_fingerprint", bl);
 }
 
@@ -5646,11 +5646,11 @@ bool Monitor::ms_get_authorizer(int service_id, AuthAuthorizer **authorizer,
     return false;
   }
   bufferlist ticket_data;
-  ::encode(blob, ticket_data);
+  encode(blob, ticket_data);
 
   bufferlist::iterator iter = ticket_data.begin();
   CephXTicketHandler handler(g_ceph_context, service_id);
-  ::decode(handler.ticket, iter);
+  decode(handler.ticket, iter);
 
   handler.session_key = info.session_key;
 

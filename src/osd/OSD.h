@@ -19,13 +19,13 @@
 
 #include "msg/Dispatcher.h"
 
-#include "common/backport14.h"
 #include "common/Mutex.h"
 #include "common/RWLock.h"
 #include "common/Timer.h"
 #include "common/WorkQueue.h"
 #include "common/AsyncReserver.h"
 #include "common/ceph_context.h"
+#include "common/config_cacher.h"
 #include "common/zipkin_trace.h"
 
 #include "mgr/MgrClient.h"
@@ -237,110 +237,7 @@ struct C_CompleteSplits;
 struct C_OpenPGs;
 class LogChannel;
 class CephContext;
-typedef ceph::shared_ptr<ObjectStore::Sequencer> SequencerRef;
 class MOSDOp;
-
-class DeletingState {
-  Mutex lock;
-  Cond cond;
-  enum {
-    QUEUED,
-    CLEARING_DIR,
-    CLEARING_WAITING,
-    DELETING_DIR,
-    DELETED_DIR,
-    CANCELED,
-  } status;
-  bool stop_deleting;
-public:
-  const spg_t pgid;
-  const PGRef old_pg_state;
-  explicit DeletingState(const pair<spg_t, PGRef> &in) :
-    lock("DeletingState::lock"), status(QUEUED), stop_deleting(false),
-    pgid(in.first), old_pg_state(in.second) {
-    }
-
-  /// transition status to CLEARING_WAITING
-  bool pause_clearing() {
-    Mutex::Locker l(lock);
-    assert(status == CLEARING_DIR);
-    if (stop_deleting) {
-      status = CANCELED;
-      cond.Signal();
-      return false;
-    }
-    status = CLEARING_WAITING;
-    return true;
-  } ///< @return false if we should cancel deletion
-
-  /// start or resume the clearing - transition the status to CLEARING_DIR
-  bool start_or_resume_clearing() {
-    Mutex::Locker l(lock);
-    assert(
-      status == QUEUED ||
-      status == DELETED_DIR ||
-      status == CLEARING_WAITING);
-    if (stop_deleting) {
-      status = CANCELED;
-      cond.Signal();
-      return false;
-    }
-    status = CLEARING_DIR;
-    return true;
-  } ///< @return false if we should cancel the deletion
-
-  /// transition status to CLEARING_DIR
-  bool resume_clearing() {
-    Mutex::Locker l(lock);
-    assert(status == CLEARING_WAITING);
-    if (stop_deleting) {
-      status = CANCELED;
-      cond.Signal();
-      return false;
-    }
-    status = CLEARING_DIR;
-    return true;
-  } ///< @return false if we should cancel deletion
-
-  /// transition status to deleting
-  bool start_deleting() {
-    Mutex::Locker l(lock);
-    assert(status == CLEARING_DIR);
-    if (stop_deleting) {
-      status = CANCELED;
-      cond.Signal();
-      return false;
-    }
-    status = DELETING_DIR;
-    return true;
-  } ///< @return false if we should cancel deletion
-
-  /// signal collection removal queued
-  void finish_deleting() {
-    Mutex::Locker l(lock);
-    assert(status == DELETING_DIR);
-    status = DELETED_DIR;
-    cond.Signal();
-  }
-
-  /// try to halt the deletion
-  bool try_stop_deletion() {
-    Mutex::Locker l(lock);
-    stop_deleting = true;
-    /**
-     * If we are in DELETING_DIR or CLEARING_DIR, there are in progress
-     * operations we have to wait for before continuing on.  States
-     * CLEARING_WAITING and QUEUED indicate that the remover will check
-     * stop_deleting before queueing any further operations.  CANCELED
-     * indicates that the remover has already halted.  DELETED_DIR
-     * indicates that the deletion has been fully queued.
-     */
-    while (status == DELETING_DIR || status == CLEARING_DIR)
-      cond.Wait(lock);
-    return status != DELETED_DIR;
-  } ///< @return true if we don't need to recreate the collection
-};
-typedef ceph::shared_ptr<DeletingState> DeletingStateRef;
 
 class OSD;
 
@@ -348,9 +245,7 @@ class OSDService {
 public:
   OSD *osd;
   CephContext *cct;
-  SharedPtrRegistry<spg_t, ObjectStore::Sequencer> osr_registry;
-  ceph::shared_ptr<ObjectStore::Sequencer> meta_osr;
-  SharedPtrRegistry<spg_t, DeletingState> deleting_pgs;
+  ObjectStore::CollectionHandle meta_ch;
   const int whoami;
   ObjectStore *&store;
   LogClient &log_client;
@@ -363,9 +258,11 @@ public:
   PerfCounters *&logger;
   PerfCounters *&recoverystate_perf;
   MonClient   *&monc;
-  ThreadPool::BatchWorkQueue<PG> &peering_wq;
   GenContextWQ recovery_gen_wq;
   ClassHandler  *&class_handler;
+
+  md_config_cacher_t<uint64_t> osd_max_object_size;
+  md_config_cacher_t<bool> osd_skip_data_digest;
 
   void enqueue_back(OpQueueItem&& qi);
   void enqueue_front(OpQueueItem&& qi);
@@ -384,6 +281,7 @@ public:
 private:
   // -- map epoch lower bound --
   Mutex pg_epoch_lock;
+  Cond pg_cond;
   multiset<epoch_t> pg_epochs;
   map<spg_t,epoch_t> pg_epoch;
 
@@ -394,11 +292,19 @@ public:
     assert(t == pg_epoch.end());
     pg_epoch[pgid] = epoch;
     pg_epochs.insert(epoch);
+    if (*pg_epochs.begin() == epoch) {
+      // we are the (new?) blocking epoch
+      pg_cond.Signal();
+    }
   }
   void pg_update_epoch(spg_t pgid, epoch_t epoch) {
     Mutex::Locker l(pg_epoch_lock);
     map<spg_t,epoch_t>::iterator t = pg_epoch.find(pgid);
     assert(t != pg_epoch.end());
+    if (*pg_epochs.begin() == t->second) {
+      // we were on the blocking epoch
+      pg_cond.Signal();
+    }
     pg_epochs.erase(pg_epochs.find(t->second));
     t->second = epoch;
     pg_epochs.insert(epoch);
@@ -407,6 +313,10 @@ public:
     Mutex::Locker l(pg_epoch_lock);
     map<spg_t,epoch_t>::iterator t = pg_epoch.find(pgid);
     if (t != pg_epoch.end()) {
+      if (*pg_epochs.begin() == t->second) {
+	// we were on the blocking epoch
+	pg_cond.Signal();
+      }
       pg_epochs.erase(pg_epochs.find(t->second));
       pg_epoch.erase(t);
     }
@@ -417,6 +327,14 @@ public:
       return 0;
     else
       return *pg_epochs.begin();
+  }
+
+  void wait_min_pg_epoch(epoch_t e) {
+    Mutex::Locker l(pg_epoch_lock);
+    while (!pg_epochs.empty() &&
+	   *pg_epochs.begin() < e) {
+      pg_cond.Wait(pg_epoch_lock);
+    }
   }
 
 private:
@@ -517,6 +435,12 @@ public:
 	pre_publish_cond.Wait(pre_publish_lock);
       }
     }
+  }
+  OSDMapRef get_next_osdmap() {
+    Mutex::Locker l(pre_publish_lock);
+    if (!next_osdmap)
+      return OSDMapRef();
+    return next_osdmap;
   }
 
 private:
@@ -774,7 +698,7 @@ public:
 
 private:
   /// throttle promotion attempts
-  std::atomic_uint promote_probability_millis{1000}; ///< probability thousands. one word.
+  std::atomic<unsigned int> promote_probability_millis{1000}; ///< probability thousands. one word.
   PromoteCounter promote_counter;
   utime_t last_recalibrate;
   unsigned long promote_max_objects, promote_max_bytes;
@@ -825,7 +749,7 @@ public:
 
   // -- tids --
   // for ops i issue
-  std::atomic_uint last_tid{0};
+  std::atomic<unsigned int> last_tid{0};
   ceph_tid_t get_tid() {
     return (ceph_tid_t)last_tid++;
   }
@@ -849,8 +773,6 @@ public:
 
   void send_pg_created(pg_t pgid);
 
-  void queue_for_peering(PG *pg);
-
   Mutex snap_sleep_lock;
   SafeTimer snap_sleep_timer;
 
@@ -860,6 +782,8 @@ public:
   AsyncReserver<spg_t> snap_reserver;
   void queue_for_snap_trim(PG *pg);
   void queue_for_scrub(PG *pg, bool with_high_priority);
+  void queue_for_pg_delete(spg_t pgid, epoch_t e);
+  void finish_pg_delete(PG *pg);
 
 private:
   // -- pg recovery and associated throttling --
@@ -939,6 +863,9 @@ public:
   SimpleLRU<epoch_t, bufferlist> map_bl_cache;
   SimpleLRU<epoch_t, bufferlist> map_bl_inc_cache;
 
+  /// final pg_num values for recently deleted pools
+  map<int64_t,int> deleted_pool_pg_nums;
+
   OSDMapRef try_get_map(epoch_t e);
   OSDMapRef get_map(epoch_t e) {
     OSDMapRef ret(try_get_map(e));
@@ -955,7 +882,6 @@ public:
     Mutex::Locker l(map_cache_lock);
     return _add_map_bl(e, bl);
   }
-  void pin_map_bl(epoch_t e, bufferlist &bl);
   void _add_map_bl(epoch_t e, bufferlist& bl);
   bool get_map_bl(epoch_t e, bufferlist& bl) {
     Mutex::Locker l(map_cache_lock);
@@ -967,11 +893,25 @@ public:
     Mutex::Locker l(map_cache_lock);
     return _add_map_inc_bl(e, bl);
   }
-  void pin_map_inc_bl(epoch_t e, bufferlist &bl);
   void _add_map_inc_bl(epoch_t e, bufferlist& bl);
   bool get_inc_map_bl(epoch_t e, bufferlist& bl);
 
-  void clear_map_bl_cache_pins(epoch_t e);
+  /// get last pg_num before a pool was deleted (if any)
+  int get_deleted_pool_pg_num(int64_t pool);
+
+  void store_deleted_pool_pg_num(int64_t pool, int pg_num) {
+    Mutex::Locker l(map_cache_lock);
+    deleted_pool_pg_nums[pool] = pg_num;
+  }
+
+  /// get pgnum from newmap or, if pool was deleted, last map pool existed in
+  int get_possibly_deleted_pool_pg_num(OSDMapRef newmap,
+				       int64_t pool) {
+    if (newmap->have_pg_pool(pool)) {
+      return newmap->get_pg_num(pool);
+    }
+    return get_deleted_pool_pg_num(pool);
+  }
 
   void need_heartbeat_peer_update();
 
@@ -984,8 +924,13 @@ public:
 private:
   // split
   Mutex in_progress_split_lock;
+  // splits are "pending" after OSD has consumed the map indicating the PG should
+  // split but the PG has not yet processed the map.
   map<spg_t, spg_t> pending_splits; // child -> parent
   map<spg_t, set<spg_t> > rev_pending_splits; // parent -> [children]
+
+  // splits are "in progress" after the PG has gotten the map, and we hold the
+  // parent lock, but the children have not yet been created.
   set<spg_t> in_progress_splits;       // child
 
 public:
@@ -995,7 +940,7 @@ public:
     return _start_split(parent, children);
   }
   void mark_split_in_progress(spg_t parent, const set<spg_t> &pgs);
-  void complete_split(const set<spg_t> &pgs);
+  void complete_split(spg_t pgid);
   void cancel_pending_splits_for_parent(spg_t parent);
   void _cancel_pending_splits_for_parent(spg_t parent);
   bool splitting(spg_t pgid);
@@ -1119,7 +1064,7 @@ public:
     NOT_STOPPING,
     PREPARING_TO_STOP,
     STOPPING };
-  std::atomic_int state{NOT_STOPPING};
+  std::atomic<int> state{NOT_STOPPING};
   int get_state() const {
     return state;
   }
@@ -1206,7 +1151,8 @@ protected:
   // asok
   friend class OSDSocketHook;
   class OSDSocketHook *asok_hook;
-  bool asok_command(string admin_command, cmdmap_t& cmdmap, string format, ostream& ss);
+  bool asok_command(std::string_view admin_command, const cmdmap_t& cmdmap,
+		    std::string_view format, std::ostream& ss);
 
 public:
   ClassHandler  *class_handler = nullptr;
@@ -1249,6 +1195,15 @@ public:
     hobject_t oid(sobject_t("infos", CEPH_NOSNAP));
     return ghobject_t(oid);
   }
+
+  static ghobject_t make_final_pool_info_oid(int64_t pool) {
+    return ghobject_t(
+      hobject_t(
+	sobject_t(
+	  object_t(string("final_pool_") + stringify(pool)),
+	  CEPH_NOSNAP)));
+  }
+
   static void recursive_remove_collection(CephContext* cct,
 					  ObjectStore *store,
 					  spg_t pgid,
@@ -1277,6 +1232,9 @@ public:
 private:
   class C_Tick;
   class C_Tick_WithoutOSDLock;
+
+  // -- config settings --
+  float m_osd_pg_epoch_max_lag_factor;
 
   // -- superblock --
   OSDSuperblock superblock;
@@ -1313,7 +1271,7 @@ public:
   }
 
 private:
-  std::atomic_int state{STATE_INITIALIZING};
+  std::atomic<int> state{STATE_INITIALIZING};
 
 public:
   int get_state() const {
@@ -1343,7 +1301,6 @@ public:
 
 private:
 
-  ThreadPool peering_tp;
   ShardedThreadPool osd_op_tp;
   ThreadPool disk_tp;
   ThreadPool command_tp;
@@ -1460,7 +1417,7 @@ private:
   map<int, int> debug_heartbeat_drops_remaining;
   Cond heartbeat_cond;
   bool heartbeat_stop;
-  std::atomic_bool heartbeat_need_update;   
+  std::atomic<bool> heartbeat_need_update;   
   map<int,HeartbeatInfo> heartbeat_peers;  ///< map of osd id to HeartbeatInfo
   utime_t last_mon_heartbeat;
   Messenger *hb_front_client_messenger;
@@ -1592,7 +1549,9 @@ private:
    * and already requeued the items.
    */
   friend class PGOpItem;
+  friend class PGPeeringItem;
   friend class PGRecovery;
+  friend class PGDelete;
 
   class ShardedOpWQ
     : public ShardedThreadPool::ShardedWQ<OpQueueItem>
@@ -1649,17 +1608,17 @@ private:
 	  sdata_op_ordering_lock(ordering_lock.c_str(), false, true,
 				 false, cct) {
 	if (opqueue == io_queue::weightedpriority) {
-	  pqueue = ceph::make_unique<
+	  pqueue = std::make_unique<
 	    WeightedPriorityQueue<OpQueueItem,uint64_t>>(
 	        max_tok_per_prio, min_cost);
 	} else if (opqueue == io_queue::prioritized) {
-	  pqueue = ceph::make_unique<
+	  pqueue = std::make_unique<
 	    PrioritizedQueue<OpQueueItem,uint64_t>>(
 		max_tok_per_prio, min_cost);
 	} else if (opqueue == io_queue::mclock_opclass) {
-	  pqueue = ceph::make_unique<ceph::mClockOpClassQueue>(cct);
+	  pqueue = std::make_unique<ceph::mClockOpClassQueue>(cct);
 	} else if (opqueue == io_queue::mclock_client) {
-	  pqueue = ceph::make_unique<ceph::mClockClientQueue>(cct);
+	  pqueue = std::make_unique<ceph::mClockClientQueue>(cct);
 	}
       }
     }; // struct ShardData
@@ -1704,7 +1663,7 @@ private:
     void prune_pg_waiters(OSDMapRef osdmap, int whoami);
 
     /// clear cached PGRef on pg deletion
-    void clear_pg_pointer(spg_t pgid);
+    void clear_pg_pointer(PG *pg);
 
     /// clear pg_slots on shutdown
     void clear_pg_slots();
@@ -1798,62 +1757,21 @@ private:
     PGRef pg, OpRequestRef op,
     ThreadPool::TPHandle &handle);
 
-  // -- peering queue --
-  struct PeeringWQ : public ThreadPool::BatchWorkQueue<PG> {
-    list<PG*> peering_queue;
-    OSD *osd;
-    set<PG*> in_use;
-    PeeringWQ(OSD *o, time_t ti, time_t si, ThreadPool *tp)
-      : ThreadPool::BatchWorkQueue<PG>(
-	"OSD::PeeringWQ", ti, si, tp), osd(o) {}
+  void enqueue_peering_evt(
+    spg_t pgid,
+    PGPeeringEventRef ref);
+  void enqueue_peering_evt_front(
+    spg_t pgid,
+    PGPeeringEventRef ref);
+  void dequeue_peering_evt(
+    PG *pg,
+    PGPeeringEventRef ref,
+    ThreadPool::TPHandle& handle);
 
-    void _dequeue(PG *pg) override {
-      for (list<PG*>::iterator i = peering_queue.begin();
-	   i != peering_queue.end();
-	   ) {
-	if (*i == pg) {
-	  peering_queue.erase(i++);
-	  pg->put("PeeringWQ");
-	} else {
-	  ++i;
-	}
-      }
-    }
-    bool _enqueue(PG *pg) override {
-      pg->get("PeeringWQ");
-      peering_queue.push_back(pg);
-      return true;
-    }
-    bool _empty() override {
-      return peering_queue.empty();
-    }
-    void _dequeue(list<PG*> *out) override;
-    void _process(
-      const list<PG *> &pgs,
-      ThreadPool::TPHandle &handle) override {
-      assert(!pgs.empty());
-      osd->process_peering_events(pgs, handle);
-      for (list<PG *>::const_iterator i = pgs.begin();
-	   i != pgs.end();
-	   ++i) {
-	(*i)->put("PeeringWQ");
-      }
-    }
-    void _process_finish(const list<PG *> &pgs) override {
-      for (list<PG*>::const_iterator i = pgs.begin();
-	   i != pgs.end();
-	   ++i) {
-	in_use.erase(*i);
-      }
-    }
-    void _clear() override {
-      assert(peering_queue.empty());
-    }
-  } peering_wq;
-
-  void process_peering_events(
-    const list<PG*> &pg,
-    ThreadPool::TPHandle &handle);
+  void dequeue_delete(
+    PG *pg,
+    epoch_t epoch,
+    ThreadPool::TPHandle& handle);
 
   friend class PG;
   friend class PrimaryLogPG;
@@ -1885,12 +1803,10 @@ private:
   void note_up_osd(int osd);
   friend class C_OnMapCommit;
 
-  bool advance_pg(
+  void advance_pg(
     epoch_t advance_to, PG *pg,
     ThreadPool::TPHandle &handle,
-    PG::RecoveryCtx *rctx,
-    set<PGRef> *split_pgs
-  );
+    PG::RecoveryCtx *rctx);
   void consume_map();
   void activate_map();
 
@@ -1904,17 +1820,11 @@ private:
   void add_map_bl(epoch_t e, bufferlist& bl) {
     return service.add_map_bl(e, bl);
   }
-  void pin_map_bl(epoch_t e, bufferlist &bl) {
-    return service.pin_map_bl(e, bl);
-  }
   bool get_map_bl(epoch_t e, bufferlist& bl) {
     return service.get_map_bl(e, bl);
   }
   void add_map_inc_bl(epoch_t e, bufferlist& bl) {
     return service.add_map_inc_bl(e, bl);
-  }
-  void pin_map_inc_bl(epoch_t e, bufferlist &bl) {
-    return service.pin_map_inc_bl(e, bl);
   }
 
 protected:
@@ -1927,10 +1837,8 @@ protected:
   std::set<create_from_osd_t> pending_creates_from_osd;
   unsigned pending_creates_from_mon = 0;
 
-  map<spg_t, list<PG::CephPeeringEvtRef> > peering_wait_for_split;
+  map<spg_t, list<PGPeeringEventRef> > peering_wait_for_split;
   PGRecoveryStats pg_recovery_stats;
-
-  PGPool _get_pool(int id, OSDMapRef createmap);
 
   PG   *_lookup_lock_pg_with_map_lock_held(spg_t pgid);
   PG   *_lookup_lock_pg(spg_t pgid);
@@ -1948,13 +1856,6 @@ public:
 protected:
   PG   *_open_lock_pg(OSDMapRef createmap,
 		      spg_t pg, bool no_lockdep_check=false);
-  enum res_result {
-    RES_PARENT,    // resurrected a parent
-    RES_SELF,      // resurrected self
-    RES_NONE       // nothing relevant deleting
-  };
-  res_result _try_resurrect_pg(
-    OSDMapRef curmap, spg_t pgid, spg_t *resurrected, PGRef *old_pg_state);
 
   PG   *_create_lock_pg(
     OSDMapRef createmap,
@@ -1977,7 +1878,7 @@ protected:
     const pg_history_t& orig_history,
     const PastIntervals& pi,
     epoch_t epoch,
-    PG::CephPeeringEvtRef evt);
+    PGPeeringEventRef evt);
   bool maybe_wait_for_max_pg(spg_t pgid, bool is_mon_create);
   void resume_creating_pg();
 
@@ -2119,7 +2020,6 @@ protected:
   void handle_force_recovery(Message *m);
 
   void handle_pg_remove(OpRequestRef op);
-  void _remove_pg(PG *pg);
 
   // -- commands --
   struct Command {
@@ -2188,48 +2088,6 @@ protected:
   bool scrub_random_backoff();
   bool scrub_load_below_threshold();
   bool scrub_time_permit(utime_t now);
-
-  // -- removing --
-  struct RemoveWQ :
-    public ThreadPool::WorkQueueVal<pair<PGRef, DeletingStateRef> > {
-    CephContext* cct;
-    ObjectStore *&store;
-    list<pair<PGRef, DeletingStateRef> > remove_queue;
-    RemoveWQ(CephContext* cct, ObjectStore *&o, time_t ti, time_t si,
-	     ThreadPool *tp)
-      : ThreadPool::WorkQueueVal<pair<PGRef, DeletingStateRef> >(
-	"OSD::RemoveWQ", ti, si, tp), cct(cct), store(o) {}
-
-    bool _empty() override {
-      return remove_queue.empty();
-    }
-    void _enqueue(pair<PGRef, DeletingStateRef> item) override {
-      remove_queue.push_back(item);
-    }
-    void _enqueue_front(pair<PGRef, DeletingStateRef> item) override {
-      remove_queue.push_front(item);
-    }
-    bool _dequeue(pair<PGRef, DeletingStateRef> item) {
-      ceph_abort();
-    }
-    pair<PGRef, DeletingStateRef> _dequeue() override {
-      assert(!remove_queue.empty());
-      pair<PGRef, DeletingStateRef> item = remove_queue.front();
-      remove_queue.pop_front();
-      return item;
-    }
-    void _process(pair<PGRef, DeletingStateRef>,
-		  ThreadPool::TPHandle &) override;
-    void _clear() override {
-      remove_queue.clear();
-    }
-    int get_remove_queue_len() {
-      lock();
-      int r = remove_queue.size();
-      unlock();
-      return r;
-    }
-  } remove_wq;
 
   // -- status reporting --
   MPGStats *collect_pg_stats();
@@ -2362,6 +2220,9 @@ private:
   int get_num_op_threads();
 
   float get_osd_recovery_sleep();
+
+  void probe_smart(ostream& ss);
+  int probe_smart_device(const char *device, int timeout, std::string *result);
 
 public:
   static int peek_meta(ObjectStore *store, string& magic,

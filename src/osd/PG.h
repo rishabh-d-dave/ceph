@@ -43,6 +43,7 @@
 #include "messages/MOSDPGLog.h"
 #include "include/str_list.h"
 #include "PGBackend.h"
+#include "PGPeeringEvent.h"
 
 #include <atomic>
 #include <list>
@@ -216,7 +217,6 @@ struct PGPool {
   epoch_t cached_epoch;
   int64_t id;
   string name;
-  uint64_t auid;
 
   pg_pool_t info;      
   SnapContext snapc;   // the default pool snapc, ready to go.
@@ -225,18 +225,16 @@ struct PGPool {
   interval_set<snapid_t> cached_removed_snaps;      // current removed_snaps set
   interval_set<snapid_t> newly_removed_snaps;  // newly removed in the last epoch
 
-  PGPool(CephContext* cct, OSDMapRef map, int64_t i)
+  PGPool(CephContext* cct, OSDMapRef map, int64_t i, const pg_pool_t& info,
+	 const string& name)
     : cct(cct),
       cached_epoch(map->get_epoch()),
       id(i),
-      name(map->get_pool_name(id)),
-      auid(map->get_pg_pool(id)->auid) {
-    const pg_pool_t *pi = map->get_pg_pool(id);
-    assert(pi);
-    info = *pi;
-    snapc = pi->get_snap_context();
+      name(name),
+      info(info) {
+    snapc = info.get_snap_context();
     if (map->require_osd_release < CEPH_RELEASE_MIMIC) {
-      pi->build_removed_snaps(cached_removed_snaps);
+      info.build_removed_snaps(cached_removed_snaps);
     }
   }
 
@@ -253,37 +251,7 @@ public:
   const spg_t pg_id;
   const coll_t coll;
 
-  // for ordering writes
-  ceph::shared_ptr<ObjectStore::Sequencer> osr;
-
   ObjectStore::CollectionHandle ch;
-
-  // -- classes --
-  class CephPeeringEvt {
-    epoch_t epoch_sent;
-    epoch_t epoch_requested;
-    boost::intrusive_ptr< const boost::statechart::event_base > evt;
-    string desc;
-  public:
-    MEMPOOL_CLASS_HELPERS();
-    template <class T>
-    CephPeeringEvt(epoch_t epoch_sent,
-		   epoch_t epoch_requested,
-		   const T &evt_) :
-      epoch_sent(epoch_sent), epoch_requested(epoch_requested),
-      evt(evt_.intrusive_from_this()) {
-      stringstream out;
-      out << "epoch_sent: " << epoch_sent
-	  << " epoch_requested: " << epoch_requested << " ";
-      evt_.print(&out);
-      desc = out.str();
-    }
-    epoch_t get_epoch_sent() { return epoch_sent; }
-    epoch_t get_epoch_requested() { return epoch_requested; }
-    const boost::statechart::event_base &get_event() { return *evt; }
-    string get_desc() { return desc; }
-  };
-  typedef ceph::shared_ptr<CephPeeringEvt> CephPeeringEvtRef;
 
   class RecoveryCtx;
 
@@ -345,6 +313,9 @@ public:
   bool is_deleting() const {
     return deleting;
   }
+  bool is_deleted() const {
+    return deleted;
+  }
   bool is_replica() const {
     return role > 0;
   }
@@ -353,7 +324,7 @@ public:
   }
   bool pg_has_reset_since(epoch_t e) {
     assert(is_locked());
-    return deleting || e < get_last_peering_reset();
+    return deleted || e < get_last_peering_reset();
   }
 
   bool is_ec_pg() const {
@@ -434,8 +405,8 @@ public:
   bool set_force_recovery(bool b);
   bool set_force_backfill(bool b);
 
-  void queue_peering_event(CephPeeringEvtRef evt);
-  void process_peering_event(RecoveryCtx *rctx);
+  void queue_peering_event(PGPeeringEventRef evt);
+  void do_peering_event(PGPeeringEventRef evt, RecoveryCtx *rcx);
   void queue_query(epoch_t msg_epoch, epoch_t query_epoch,
 		   pg_shard_t from, const pg_query_t& q);
   void queue_null(epoch_t msg_epoch, epoch_t query_epoch);
@@ -502,7 +473,7 @@ public:
 
   virtual void on_removal(ObjectStore::Transaction *t) = 0;
 
-  void pg_remove_object(const ghobject_t& oid, ObjectStore::Transaction *t);
+  void _delete_some();
 
   // reference counting
 #ifdef PG_DEBUG_REFS
@@ -545,7 +516,7 @@ protected:
   // unlock() when done with the current pointer (_most common_).
   mutable Mutex _lock = {"PG::_lock"};
 
-  std::atomic_uint ref{0};
+  std::atomic<unsigned int> ref{0};
 
 #ifdef PG_DEBUG_REFS
   Mutex _ref_id_lock = {"PG::_ref_id_lock"};
@@ -596,6 +567,7 @@ protected:
 
 
   bool deleting;  // true while in removing or OSD is shutting down
+  bool deleted = false;
 
   ZTracer::Endpoint trace_endpoint;
 
@@ -855,25 +827,8 @@ protected:
 protected:
   eversion_t  last_update_ondisk;    // last_update that has committed; ONLY DEFINED WHEN is_active()
   eversion_t  last_complete_ondisk;  // last_complete that has committed.
-  eversion_t  last_update_applied;
 
-
-  struct C_UpdateLastRollbackInfoTrimmedToApplied : Context {
-    PGRef pg;
-    epoch_t e;
-    eversion_t v;
-    C_UpdateLastRollbackInfoTrimmedToApplied(PG *pg, epoch_t e, eversion_t v)
-      : pg(pg), e(e), v(v) {}
-    void finish(int) override {
-      pg->lock();
-      if (!pg->pg_has_reset_since(e)) {
-	pg->last_rollback_info_trimmed_to_applied = v;
-      }
-      pg->unlock();
-    }
-  };
-  // entries <= last_rollback_info_trimmed_to_applied have been trimmed,
-  // and the transaction has applied
+  // entries <= last_rollback_info_trimmed_to_applied have been trimmed
   eversion_t  last_rollback_info_trimmed_to_applied;
 
   // primary state
@@ -1249,6 +1204,8 @@ protected:
   unsigned get_recovery_priority();
   /// get backfill reservation priority
   unsigned get_backfill_priority();
+  /// get priority for pg deletion
+  unsigned get_delete_priority();
 
   void mark_clean();  ///< mark an active pg clean
 
@@ -1439,6 +1396,7 @@ protected:
   virtual void _split_into(pg_t child_pgid, PG *child, unsigned split_bits) = 0;
 
   friend class C_OSD_RepModify_Commit;
+  friend class C_DeleteMore;
 
   // -- backoff --
   Mutex backoff_lock;  // orders inside Backoff::lock
@@ -1475,13 +1433,16 @@ public:
 
     // common to both scrubs
     bool active;
-    int waiting_on;
     set<pg_shard_t> waiting_on_whom;
     int shallow_errors;
     int deep_errors;
     int large_omap_objects = 0;
     int fixed;
     ScrubMap primary_scrubmap;
+    ScrubMapBuilder primary_scrubmap_pos;
+    epoch_t replica_scrub_start = 0;
+    ScrubMap replica_scrubmap;
+    ScrubMapBuilder replica_scrubmap_pos;
     map<pg_shard_t, ScrubMap> received_maps;
     OpRequestRef active_rep_scrub;
     utime_t scrub_reg_stamp;  // stamp we registered for
@@ -1495,7 +1456,7 @@ public:
     bool must_scrub, must_deep_scrub, must_repair;
 
     // Priority to use for scrub scheduling
-    unsigned priority;
+    unsigned priority = 0;
 
     // this flag indicates whether we would like to do auto-repair of the PG or not
     bool auto_repair;
@@ -1522,18 +1483,20 @@ public:
       INACTIVE,
       NEW_CHUNK,
       WAIT_PUSHES,
-      WAIT_LAST_UPDATE,
       BUILD_MAP,
+      BUILD_MAP_DONE,
       WAIT_REPLICAS,
       COMPARE_MAPS,
       WAIT_DIGEST_UPDATES,
       FINISH,
+      BUILD_MAP_REPLICA,
     } state;
 
     std::unique_ptr<Scrub::Store> store;
     // deep scrub
     bool deep;
-    uint32_t seed;
+    int preempt_left;
+    int preempt_divisor;
 
     list<Context*> callbacks;
     void add_callback(Context *context) {
@@ -1556,28 +1519,22 @@ public:
         case INACTIVE: ret = "INACTIVE"; break;
         case NEW_CHUNK: ret = "NEW_CHUNK"; break;
         case WAIT_PUSHES: ret = "WAIT_PUSHES"; break;
-        case WAIT_LAST_UPDATE: ret = "WAIT_LAST_UPDATE"; break;
         case BUILD_MAP: ret = "BUILD_MAP"; break;
+        case BUILD_MAP_DONE: ret = "BUILD_MAP_DONE"; break;
         case WAIT_REPLICAS: ret = "WAIT_REPLICAS"; break;
         case COMPARE_MAPS: ret = "COMPARE_MAPS"; break;
         case WAIT_DIGEST_UPDATES: ret = "WAIT_DIGEST_UPDATES"; break;
         case FINISH: ret = "FINISH"; break;
+        case BUILD_MAP_REPLICA: ret = "BUILD_MAP_REPLICA"; break;
       }
       return ret;
     }
 
     bool is_chunky_scrub_active() const { return state != INACTIVE; }
 
-    // classic (non chunk) scrubs block all writes
-    // chunky scrubs only block writes to a range
-    bool write_blocked_by_scrub(const hobject_t &soid) {
-      return (soid >= start && soid < end);
-    }
-
     // clear all state
     void reset() {
       active = false;
-      waiting_on = 0;
       waiting_on_whom.clear();
       if (active_rep_scrub) {
         active_rep_scrub = OpRequestRef();
@@ -1598,12 +1555,15 @@ public:
       large_omap_objects = 0;
       fixed = 0;
       deep = false;
-      seed = 0;
       run_callbacks();
       inconsistent.clear();
       missing.clear();
       authoritative.clear();
       num_digest_updates_pending = 0;
+      primary_scrubmap = ScrubMap();
+      primary_scrubmap_pos.reset();
+      replica_scrubmap = ScrubMap();
+      replica_scrubmap_pos.reset();
       cleaned_meta_map = ScrubMap();
       sleeping = false;
       needs_sleep = true;
@@ -1618,6 +1578,14 @@ protected:
   bool scrub_after_recovery;
 
   int active_pushes;
+
+  bool scrub_can_preempt = false;
+  bool scrub_preempted = false;
+
+  // we allow some number of preemptions of the scrub, which mean we do
+  // not block.  then we start to block.  once we start blocking, we do
+  // not stop until the scrub range is completed.
+  bool write_blocked_by_scrub(const hobject_t &soid);
 
   void repair_object(
     const hobject_t& soid, list<pair<ScrubMap::object, pg_shard_t> > *ok_peers,
@@ -1639,10 +1607,11 @@ protected:
     ThreadPool::TPHandle &handle);
   void _request_scrub_map(pg_shard_t replica, eversion_t version,
                           hobject_t start, hobject_t end, bool deep,
-			  uint32_t seed);
+			  bool allow_preemption);
   int build_scrub_map_chunk(
     ScrubMap &map,
-    hobject_t start, hobject_t end, bool deep, uint32_t seed,
+    ScrubMapBuilder &pos,
+    hobject_t start, hobject_t end, bool deep,
     ThreadPool::TPHandle &handle);
   /**
    * returns true if [begin, end) is good to scrub at this time
@@ -1688,8 +1657,8 @@ protected:
       pg(pg), epoch(epoch), evt(evt) {}
     void finish(int r) override {
       pg->lock();
-      pg->queue_peering_event(PG::CephPeeringEvtRef(
-				new PG::CephPeeringEvt(
+      pg->queue_peering_event(PGPeeringEventRef(
+				new PGPeeringEvent(
 				  epoch,
 				  epoch,
 				  evt)));
@@ -1698,8 +1667,7 @@ protected:
   };
 
 
-  list<CephPeeringEvtRef> peering_queue;  // op queue
-  list<CephPeeringEvtRef> peering_waiters;
+  list<PGPeeringEventRef> peering_waiters;
 
   struct QueryState : boost::statechart::event< QueryState > {
     Formatter *f;
@@ -1847,7 +1815,6 @@ protected:
   public:
   TrivialEvent(NullEvt)
   protected:
-  TrivialEvent(FlushedEvt)
   TrivialEvent(Backfilled)
   TrivialEvent(LocalBackfillReserved)
   public:
@@ -1886,6 +1853,13 @@ protected:
   TrivialEvent(AllReplicasActivated)
 
   TrivialEvent(IntervalFlush)
+
+  public:
+  TrivialEvent(DeleteStart)
+  TrivialEvent(DeleteSome)
+  protected:
+  TrivialEvent(DeleteReserved)
+  TrivialEvent(DeleteInterrupted)
 
   /* Encapsulates PG recovery process */
   class RecoveryState {
@@ -1997,6 +1971,10 @@ protected:
     //       RepWaitBackfillReserved
     //       RepWaitRecoveryReserved
     //     Stray
+    //     ToDelete
+    //       WaitDeleteReserved
+    //       Deleting
+    // Crashed
 
     struct Crashed : boost::statechart::state< Crashed, RecoveryMachine >, NamedState {
       explicit Crashed(my_context ctx);
@@ -2033,14 +2011,12 @@ protected:
 	boost::statechart::custom_reaction< AdvMap >,
 	boost::statechart::custom_reaction< ActMap >,
 	boost::statechart::custom_reaction< NullEvt >,
-	boost::statechart::custom_reaction< FlushedEvt >,
 	boost::statechart::custom_reaction< IntervalFlush >,
 	boost::statechart::transition< boost::statechart::event_base, Crashed >
 	> reactions;
       boost::statechart::result react(const QueryState& q);
       boost::statechart::result react(const AdvMap&);
       boost::statechart::result react(const ActMap&);
-      boost::statechart::result react(const FlushedEvt&);
       boost::statechart::result react(const IntervalFlush&);
       boost::statechart::result react(const boost::statechart::event_base&) {
 	return discard_event();
@@ -2057,13 +2033,11 @@ protected:
 	boost::statechart::custom_reaction< QueryState >,
 	boost::statechart::custom_reaction< AdvMap >,
 	boost::statechart::custom_reaction< NullEvt >,
-	boost::statechart::custom_reaction< FlushedEvt >,
 	boost::statechart::custom_reaction< IntervalFlush >,
 	boost::statechart::transition< boost::statechart::event_base, Crashed >
 	> reactions;
       boost::statechart::result react(const QueryState& q);
       boost::statechart::result react(const AdvMap&);
-      boost::statechart::result react(const FlushedEvt&);
       boost::statechart::result react(const IntervalFlush&);
       boost::statechart::result react(const boost::statechart::event_base&) {
 	return discard_event();
@@ -2297,6 +2271,7 @@ protected:
       void exit();
     };
 
+    struct ToDelete;
     struct RepNotRecovering;
     struct ReplicaActive : boost::statechart::state< ReplicaActive, Started, RepNotRecovering >, NamedState {
       explicit ReplicaActive(my_context ctx);
@@ -2314,7 +2289,8 @@ protected:
 	boost::statechart::custom_reaction< UnfoundRecovery >,
 	boost::statechart::custom_reaction< UnfoundBackfill >,
 	boost::statechart::custom_reaction< RemoteBackfillPreempted >,
-	boost::statechart::custom_reaction< RemoteRecoveryPreempted >
+	boost::statechart::custom_reaction< RemoteRecoveryPreempted >,
+	boost::statechart::transition<DeleteStart, ToDelete>
 	> reactions;
       boost::statechart::result react(const QueryState& q);
       boost::statechart::result react(const MInfoRec& infoevt);
@@ -2465,9 +2441,8 @@ protected:
       void exit();
     };
 
-    struct Stray : boost::statechart::state< Stray, Started >, NamedState {
-      map<int, pair<pg_query_t, epoch_t> > pending_queries;
-
+    struct Stray : boost::statechart::state< Stray, Started >,
+	      NamedState {
       explicit Stray(my_context ctx);
       void exit();
 
@@ -2476,7 +2451,8 @@ protected:
 	boost::statechart::custom_reaction< MLogRec >,
 	boost::statechart::custom_reaction< MInfoRec >,
 	boost::statechart::custom_reaction< ActMap >,
-	boost::statechart::custom_reaction< RecoveryDone >
+	boost::statechart::custom_reaction< RecoveryDone >,
+	boost::statechart::transition<DeleteStart, ToDelete>
 	> reactions;
       boost::statechart::result react(const MQuery& query);
       boost::statechart::result react(const MLogRec& logevt);
@@ -2485,6 +2461,43 @@ protected:
       boost::statechart::result react(const RecoveryDone&) {
 	return discard_event();
       }
+    };
+
+    struct WaitDeleteReserved;
+    struct ToDelete : boost::statechart::state<ToDelete, Started, WaitDeleteReserved>, NamedState {
+      unsigned priority = 0;
+      typedef boost::mpl::list <
+	boost::statechart::custom_reaction< ActMap >,
+	boost::statechart::custom_reaction< DeleteSome >
+	> reactions;
+      explicit ToDelete(my_context ctx);
+      boost::statechart::result react(const ActMap &evt);
+      boost::statechart::result react(const DeleteSome &evt) {
+	// happens if we drop out of Deleting due to reprioritization etc.
+	return discard_event();
+      }
+      void exit();
+    };
+
+    struct Deleting;
+    struct WaitDeleteReserved : boost::statechart::state<WaitDeleteReserved,
+							 ToDelete>, NamedState {
+      typedef boost::mpl::list <
+	boost::statechart::transition<DeleteReserved, Deleting>
+	> reactions;
+      explicit WaitDeleteReserved(my_context ctx);
+      void exit();
+    };
+
+    struct Deleting : boost::statechart::state<Deleting,
+					       ToDelete>, NamedState {
+      typedef boost::mpl::list <
+	boost::statechart::custom_reaction< DeleteSome >,
+	boost::statechart::transition<DeleteInterrupted, WaitDeleteReserved>
+	> reactions;
+      explicit Deleting(my_context ctx);
+      boost::statechart::result react(const DeleteSome &evt);
+      void exit();
     };
 
     struct GetLog;
@@ -2583,7 +2596,6 @@ protected:
       void exit();
     };
 
-
     RecoveryMachine machine;
     PG *pg;
 
@@ -2613,7 +2625,7 @@ protected:
       end_handle();
     }
 
-    void handle_event(CephPeeringEvtRef evt,
+    void handle_event(PGPeeringEventRef evt,
 		      RecoveryCtx *rctx) {
       start_handle(rctx);
       machine.process_event(evt->get_event());
@@ -2715,6 +2727,7 @@ protected:
   bool is_degraded() const { return state_test(PG_STATE_DEGRADED); }
   bool is_undersized() const { return state_test(PG_STATE_UNDERSIZED); }
   bool is_scrubbing() const { return state_test(PG_STATE_SCRUBBING); }
+  bool is_remapped() const { return state_test(PG_STATE_REMAPPED); }
   bool is_peered() const {
     return state_test(PG_STATE_ACTIVE) || state_test(PG_STATE_PEERED);
   }
@@ -2848,7 +2861,7 @@ protected:
   bool can_discard_replica_op(OpRequestRef& op);
 
   bool old_peering_msg(epoch_t reply_epoch, epoch_t query_epoch);
-  bool old_peering_evt(CephPeeringEvtRef evt) {
+  bool old_peering_evt(PGPeeringEventRef evt) {
     return old_peering_msg(evt->get_epoch_sent(), evt->get_epoch_requested());
   }
   static bool have_same_or_newer_map(epoch_t cur_epoch, epoch_t e) {
@@ -2866,6 +2879,7 @@ protected:
 
 
   // abstract bits
+  friend class FlushState;
 
   virtual void on_role_change() = 0;
   virtual void on_pool_change() = 0;

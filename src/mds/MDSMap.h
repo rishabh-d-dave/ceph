@@ -16,17 +16,18 @@
 #ifndef CEPH_MDSMAP_H
 #define CEPH_MDSMAP_H
 
+#include <algorithm>
+#include <map>
+#include <set>
+#include <string>
+#include <string_view>
+
 #include <errno.h>
 
 #include "include/types.h"
 #include "common/Clock.h"
 #include "msg/Message.h"
 #include "include/health.h"
-
-#include <set>
-#include <map>
-#include <string>
-#include <algorithm>
 
 #include "common/config.h"
 
@@ -230,12 +231,12 @@ public:
       flags(CEPH_MDSMAP_DEFAULTS), last_failure(0),
       last_failure_osd_epoch(0),
       tableserver(0), root(0),
-      session_timeout(0),
-      session_autoclose(0),
-      max_file_size(0),
+      session_timeout(60),
+      session_autoclose(300),
+      max_file_size(1ULL<<40), /* 1TB */
       cas_pool(-1),
       metadata_pool(-1),
-      max_mds(0),
+      max_mds(1),
       standby_count_wanted(-1),
       ever_allowed_features(0),
       explicitly_allowed_features(0),
@@ -249,9 +250,15 @@ public:
   utime_t get_session_timeout() const {
     return utime_t(session_timeout,0);
   }
+  void set_session_timeout(uint32_t t) {
+    session_timeout = t;
+  }
 
   utime_t get_session_autoclose() const {
     return utime_t(session_autoclose, 0);
+  }
+  void set_session_autoclose(uint32_t t) {
+    session_autoclose = t;
   }
 
   uint64_t get_max_filesize() const { return max_file_size; }
@@ -262,7 +269,7 @@ public:
   void set_flag(int f) { flags |= f; }
   void clear_flag(int f) { flags &= ~f; }
 
-  const std::string &get_fs_name() const {return fs_name;}
+  std::string_view get_fs_name() const {return fs_name;}
 
   void set_snaps_allowed() {
     set_flag(CEPH_MDSMAP_ALLOW_SNAPS);
@@ -343,7 +350,7 @@ public:
     assert(up.count(m) && mds_info.count(up.at(m)));
     return mds_info.at(up.at(m));
   }
-  mds_gid_t find_mds_gid_by_name(const std::string& s) const {
+  mds_gid_t find_mds_gid_by_name(std::string_view s) const {
     for (std::map<mds_gid_t,mds_info_t>::const_iterator p = mds_info.begin();
 	 p != mds_info.end();
 	 ++p) {

@@ -197,6 +197,7 @@ int main(int argc, const char **argv)
           flags);
 
   list<string> frontends;
+  g_conf->early_expand_meta(g_conf->rgw_frontends, &cerr);
   get_str_list(g_conf->rgw_frontends, ",", frontends);
   multimap<string, RGWFrontendConfig *> fe_map;
   list<RGWFrontendConfig *> configs;
@@ -285,6 +286,9 @@ int main(int argc, const char **argv)
   g_ceph_context->enable_perf_counter();
 
   common_init_finish(g_ceph_context);
+
+  init_async_signal_handler();
+  register_async_signal_handler(SIGHUP, sighup_handler);
 
   int r = rgw_tools_init(g_ceph_context);
   if (r < 0) {
@@ -426,8 +430,6 @@ int main(int argc, const char **argv)
     exit(1);
   }
 
-  init_async_signal_handler();
-  register_async_signal_handler(SIGHUP, sighup_handler);
   register_async_signal_handler(SIGTERM, handle_sigterm);
   register_async_signal_handler(SIGINT, handle_sigterm);
   register_async_signal_handler(SIGUSR1, handle_sigterm);
@@ -473,7 +475,7 @@ int main(int argc, const char **argv)
       std::string uri_prefix;
       config->get_val("prefix", "", &uri_prefix);
       RGWProcessEnv env{ store, &rest, olog, port, uri_prefix, auth_registry };
-      fe = new RGWAsioFrontend(env);
+      fe = new RGWAsioFrontend(env, config);
     }
 #endif /* WITH_RADOSGW_BEAST_FRONTEND */
 #if defined(WITH_RADOSGW_FCGI_FRONTEND)
@@ -567,7 +569,7 @@ int main(int argc, const char **argv)
   delete olog;
 
   RGWStoreManager::close_storage(store);
-
+  rgw::auth::s3::LDAPEngine::shutdown();
   rgw_tools_cleanup();
   rgw_shutdown_resolver();
   curl_global_cleanup();

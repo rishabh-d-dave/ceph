@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 2.8.12)
 
 project(ceph CXX C ASM)
-set(VERSION 12.1.2)
+set(VERSION 13.0.1)
 
 if(POLICY CMP0046)
   # Tweak policies (this one disables "missing" dependency warning)
@@ -96,7 +96,7 @@ CHECK_FUNCTION_EXISTS(getgrouplist HAVE_GETGROUPLIST)
 if(NOT APPLE)
   CHECK_FUNCTION_EXISTS(fdatasync HAVE_FDATASYNC)
 endif()
-CHECK_FUNCTION_EXISTS(strerror_r HAVE_STRERROR_R)
+CHECK_FUNCTION_EXISTS(strerror_r HAVE_Strerror_R)
 CHECK_FUNCTION_EXISTS(name_to_handle_at HAVE_NAME_TO_HANDLE_AT)
 CHECK_FUNCTION_EXISTS(pipe2 HAVE_PIPE2)
 set(CMAKE_REQUIRED_LIBRARIES pthread)
@@ -169,6 +169,13 @@ else(ENABLE_SHARED)
 endif(ENABLE_SHARED)
 set(CMAKE_POSITION_INDEPENDENT_CODE ${ENABLE_SHARED})
 
+option(WITH_STATIC_LIBSTDCXX "Link against libstdc++ statically" OFF)
+if(WITH_STATIC_LIBSTDCXX)
+  if(NOT CMAKE_COMPILER_IS_GNUCXX)
+    message(FATAL_ERROR "Please use GCC to enable WITH_STATIC_LIBSTDCXX")
+  endif()
+endif()
+
 option(WITH_RDMA "Enable RDMA in async messenger" ON)
 if(WITH_RDMA)
   find_package(rdma REQUIRED)
@@ -219,7 +226,7 @@ if(WITH_BLUESTORE)
   set(HAVE_LIBAIO ${AIO_FOUND})
 endif()
 
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "i386|i686|amd64|x86_64|AMD64")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "i386|i686|amd64|x86_64|AMD64|aarch64")
   option(WITH_SPDK "Enable SPDK" ON)
 else()
   option(WITH_SPDK "Enable SPDK" OFF)
@@ -286,6 +293,11 @@ endif(WITH_LEVELDB)
 
 find_package(snappy REQUIRED)
 
+option(WITH_BROTLI "Brotli compression support" OFF)
+if(WITH_BROTLI)
+  set(HAVE_BROTLI TRUE)
+endif()
+
 option(WITH_LZ4 "LZ4 compression support" OFF)
 if(WITH_LZ4)
   find_package(LZ4 1.7 REQUIRED)
@@ -332,31 +344,11 @@ set(CMAKE_REQUIRED_INCLUDES ${CURL_INCLUDE_DIRS})
 set(CMAKE_REQUIRED_LIBRARIES ${CURL_LIBRARIES})
 CHECK_SYMBOL_EXISTS(curl_multi_wait curl/curl.h HAVE_CURL_MULTI_WAIT)
 
-# nss or cryptopp?
-option(WITH_NSS "Use NSS crypto and SSL implementations" ON)
-if (${WITH_NSS})
-  find_package(NSS REQUIRED)
-    set(USE_NSS 1)
-    find_package(NSPR REQUIRED)
-    set(CRYPTO_LIBS ${NSS_LIBRARIES} ${NSPR_LIBRARIES})
-else ()
-  find_package(cryptopp REQUIRED)
-    set(CRYPTO_LIBS ${CRYPTOPP_LIBRARIES})
-    set(USE_CRYPTOPP 1)
-endif (${WITH_NSS})
-
-option(WITH_SSL "SSL build selected" ON)
-if(USE_NSS)
-  #nss
-  set(SSL_LIBRARIES ${NSS_LIBRARIES})
-  message(STATUS "SSL with NSS selected (Libs: ${SSL_LIBRARIES})")
-else(USE_NSS)
-  #openssl
-  find_package(OpenSSL REQUIRED)
-  set(USE_OPENSSL ON)
-  set(SSL_LIBRARIES ${OPENSSL_LIBRARIES})
-  message(STATUS "SSL with OpenSSL selected (Libs: ${SSL_LIBRARIES})")
-endif(USE_NSS)
+find_package(NSS REQUIRED)
+find_package(NSPR REQUIRED)
+set(USE_NSS 1)
+set(CRYPTO_LIBS ${NSS_LIBRARIES} ${NSPR_LIBRARIES})
+set(SSL_LIBRARIES ${NSS_LIBRARIES})
 
 option(WITH_XIO "Enable XIO messaging" OFF)
 if(WITH_XIO)
@@ -366,9 +358,6 @@ endif()
 
 option(WITH_DPDK "Enable DPDK messaging" OFF)
 if(WITH_DPDK)
-  if(NOT USE_CRYPTOPP)
-    message(FATAL_ERROR "CRYPTOPP must be supported when enable DPDK.")
-  endif()
   find_package(dpdk)
   set(HAVE_DPDK ${DPDK_FOUND})
   if(NOT TARGET dpdk-ext)
@@ -386,6 +375,11 @@ if(WITH_BLKIN)
   include_directories(SYSTEM src/blkin/blkin-lib)
 endif(WITH_BLKIN)
 
+option(WITH_BOOST_CONTEXT "Enable boost::asio stackful coroutines" ON)
+if(WITH_BOOST_CONTEXT)
+  set(HAVE_BOOST_CONTEXT ON)
+endif()
+
 #option for RGW
 option(WITH_RADOSGW "Rados Gateway is enabled" ON)
 option(WITH_RADOSGW_FCGI_FRONTEND "Rados Gateway's FCGI frontend is enabled" OFF)
@@ -395,14 +389,15 @@ if(WITH_RADOSGW)
   if(WITH_RADOSGW_FCGI_FRONTEND)
     find_package(fcgi REQUIRED)
   endif()
+  if(WITH_RADOSGW_BEAST_FRONTEND AND NOT WITH_BOOST_CONTEXT)
+    message(WARNING "disabling WITH_RADOSGW_BEAST_FRONTEND, which depends on WITH_BOOST_CONTEXT")
+    set(WITH_RADOSGW_BEAST_FRONTEND OFF)
+  endif()
 endif(WITH_RADOSGW)
 
 
 if (WITH_RADOSGW)
-  if (NOT DEFINED OPENSSL_FOUND)
-    message(STATUS "Looking for openssl anyways, because radosgw selected")
-    find_package(OpenSSL)
-  endif()
+  find_package(OpenSSL)
   if (OPENSSL_FOUND)
     execute_process(
       COMMAND
@@ -445,9 +440,15 @@ option(WITH_CEPHFS "CephFS is enabled" ON)
 #option for Mgr
 option(WITH_MGR "ceph-mgr is enabled" ON)
 if(WITH_MGR)
-  set(Python_ADDITIONAL_VERSIONS 2.7)
-  find_package(PythonInterp 2.7 REQUIRED)
-  find_package(PythonLibs 2.7 REQUIRED)
+  # Please specify 3 or 3.[0-7] if you want to build with python3 support.
+  # FindPyhonInterp and FindPythonLibs think they belong to different families.
+  set(MGR_PYTHON_VERSION "2.7" CACHE
+    STRING "minimal required version of python runtime for running mgr plugins. ")
+  find_package(PythonInterp ${MGR_PYTHON_VERSION} REQUIRED)
+  find_package(PythonLibs ${MGR_PYTHON_VERSION} REQUIRED)
+  set(MGR_PYTHON_EXECUTABLE ${PYTHON_EXECUTABLE})
+  set(MGR_PYTHON_LIBRARIES ${PYTHON_LIBRARIES})
+  set(MGR_PYTHON_VERSION_MAJOR ${PYTHON_VERSION_MAJOR})
   # Boost dependency check deferred to Boost section
 endif(WITH_MGR)
 
@@ -559,12 +560,14 @@ option(WITH_SYSTEM_BOOST "require and build with system Boost" OFF)
 
 # Boost::thread depends on Boost::atomic, so list it explicitly.
 set(BOOST_COMPONENTS
-  atomic thread system regex random program_options date_time iostreams
-  filesystem)
+  atomic thread system regex random program_options date_time iostreams)
 set(BOOST_HEADER_COMPONENTS container)
 
 if(WITH_MGR)
 	list(APPEND BOOST_COMPONENTS python)
+endif()
+if(WITH_BOOST_CONTEXT)
+  list(APPEND BOOST_COMPONENTS context coroutine)
 endif()
 
 set(Boost_USE_MULTITHREADED ON)
@@ -575,13 +578,13 @@ if(WITH_SYSTEM_BOOST)
   else()
     set(Boost_USE_STATIC_LIBS ON)
   endif()
-  find_package(Boost 1.61 COMPONENTS ${BOOST_COMPONENTS} REQUIRED)
+  find_package(Boost 1.66 COMPONENTS ${BOOST_COMPONENTS} REQUIRED)
 else()
   set(BOOST_J 1 CACHE STRING
     "max jobs for Boost build") # override w/-DBOOST_J=<n>
   set(Boost_USE_STATIC_LIBS ON)
   include(BuildBoost)
-  build_boost(1.63
+  build_boost(1.66
     COMPONENTS ${BOOST_COMPONENTS} ${BOOST_HEADER_COMPONENTS})
   include_directories(BEFORE SYSTEM ${Boost_INCLUDE_DIRS})
 endif()
@@ -590,6 +593,19 @@ set(Boost_USE_MULTITHREADED ON)
 include_directories(SYSTEM ${PROJECT_BINARY_DIR}/include)
 
 find_package(Threads REQUIRED)
+
+execute_process(
+  COMMAND ./librarytest.sh ${CMAKE_CXX_COMPILER} ${CMAKE_CXX_FLAGS}
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  OUTPUT_VARIABLE CXX_STDLIB
+  )
+
+if(CXX_STDLIB STREQUAL "libstdc++" OR CXX_STDLIB STREQUAL "libc++")
+  message(STATUS "We are using ${CXX_STDLIB}.")
+else()
+  message(FATAL_ERROR
+    "Unable to determine C++ standard library, got ${CXX_STDLIB}.")
+endif()
 
 option(WITH_SELINUX "build SELinux policy" OFF)
 if(WITH_SELINUX)

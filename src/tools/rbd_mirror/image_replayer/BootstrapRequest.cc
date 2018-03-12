@@ -125,7 +125,7 @@ void BootstrapRequest<I>::handle_get_remote_tag_class(int r) {
   librbd::journal::ClientData client_data;
   bufferlist::iterator it = m_client.data.begin();
   try {
-    ::decode(client_data, it);
+    decode(client_data, it);
   } catch (const buffer::error &err) {
     derr << ": failed to decode remote client meta data: " << err.what()
          << dendl;
@@ -240,7 +240,7 @@ void BootstrapRequest<I>::update_client_state() {
 
   librbd::journal::ClientData client_data(client_meta);
   bufferlist data_bl;
-  ::encode(client_data, data_bl);
+  encode(client_data, data_bl);
 
   Context *ctx = create_context_callback<
     BootstrapRequest<I>, &BootstrapRequest<I>::handle_update_client_state>(
@@ -372,7 +372,7 @@ void BootstrapRequest<I>::register_client() {
 
   librbd::journal::ClientData client_data{mirror_peer_client_meta};
   bufferlist client_data_bl;
-  ::encode(client_data, client_data_bl);
+  encode(client_data, client_data_bl);
 
   Context *ctx = create_context_callback<
     BootstrapRequest<I>, &BootstrapRequest<I>::handle_register_client>(
@@ -412,7 +412,7 @@ void BootstrapRequest<I>::update_client_image() {
 
   librbd::journal::ClientData client_data(client_meta);
   bufferlist data_bl;
-  ::encode(client_data, data_bl);
+  encode(client_data, data_bl);
 
   Context *ctx = create_context_callback<
     BootstrapRequest<I>, &BootstrapRequest<I>::handle_update_client_image>(
@@ -466,7 +466,11 @@ void BootstrapRequest<I>::handle_create_local_image(int r) {
   dout(20) << ": r=" << r << dendl;
 
   if (r < 0) {
-    derr << ": failed to create local image: " << cpp_strerror(r) << dendl;
+    if (r == -ENOENT) {
+      dout(10) << ": parent image does not exist" << dendl;
+    } else {
+      derr << ": failed to create local image: " << cpp_strerror(r) << dendl;
+    }
     m_ret_val = r;
     close_remote_image();
     return;
@@ -549,7 +553,7 @@ void BootstrapRequest<I>::handle_get_remote_tags(int r) {
 
     try {
       bufferlist::iterator it = remote_tag.data.begin();
-      ::decode(remote_tag_data, it);
+      decode(remote_tag_data, it);
       remote_tag_data_valid = true;
     } catch (const buffer::error &err) {
       derr << ": failed to decode remote tag " << remote_tag.tid << ": "

@@ -57,10 +57,16 @@ private:
   struct Update {
     std::string global_image_id;
     std::string instance_id;
+    utime_t mapped_time;
 
-    Update(const std::string &global_image_id, const std::string &instance_id)
+    Update(const std::string &global_image_id, const std::string &instance_id,
+           utime_t mapped_time)
       : global_image_id(global_image_id),
-        instance_id(instance_id) {
+        instance_id(instance_id),
+        mapped_time(mapped_time) {
+    }
+    Update(const std::string &global_image_id, const std::string &instance_id)
+      : Update(global_image_id, instance_id, ceph_clock_now()) {
     }
   };
   typedef std::list<Update> Updates;
@@ -141,6 +147,25 @@ private:
 
     void finish(int r) override {
       image_map->queue_remove_map(global_image_id);
+    }
+
+    // maybe called more than once
+    void complete(int r) override {
+      finish(r);
+    }
+  };
+
+  struct C_AcquireImage : Context {
+    ImageMap *image_map;
+    std::string global_image_id;
+
+    C_AcquireImage(ImageMap *image_map, const std::string &global_image_id)
+      : image_map(image_map),
+        global_image_id(global_image_id) {
+    }
+
+    void finish(int r) override {
+      image_map->queue_acquire_image(global_image_id);
     }
 
     // maybe called more than once

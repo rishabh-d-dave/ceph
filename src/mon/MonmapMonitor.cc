@@ -230,7 +230,7 @@ bool MonmapMonitor::preprocess_command(MonOpRequestRef op)
   bufferlist rdata;
   stringstream ss;
 
-  map<string, cmd_vartype> cmdmap;
+  cmdmap_t cmdmap;
   if (!cmdmap_from_json(m->cmd, &cmdmap, ss)) {
     string rs = ss.str();
     mon->reply_command(op, -EINVAL, rs, rdata, get_last_committed());
@@ -281,7 +281,7 @@ bool MonmapMonitor::preprocess_command(MonOpRequestRef op)
       p->decode(bl);
     }
 
-    assert(p != NULL);
+    assert(p);
 
     if (prefix == "mon getmap") {
       p->encode(rdata, m->get_connection()->get_features());
@@ -308,8 +308,10 @@ bool MonmapMonitor::preprocess_command(MonOpRequestRef op)
       rdata.append(ds);
       ss << "dumped monmap epoch " << p->get_epoch();
     }
-    if (p != mon->monmap)
+    if (p != mon->monmap) {
        delete p;
+       p = nullptr;
+    }
 
   } else if (prefix == "mon feature ls") {
    
@@ -420,7 +422,7 @@ bool MonmapMonitor::prepare_command(MonOpRequestRef op)
   string rs;
   int err = -EINVAL;
 
-  map<string, cmd_vartype> cmdmap;
+  cmdmap_t cmdmap;
   if (!cmdmap_from_json(m->cmd, &cmdmap, ss)) {
     string rs = ss.str();
     mon->reply_command(op, -EINVAL, rs, get_last_committed());
@@ -767,7 +769,7 @@ void MonmapMonitor::check_sub(Subscription *sub)
   if (sub->next <= epoch) {
     mon->send_latest_monmap(sub->session->con.get());
     if (sub->onetime) {
-      mon->with_session_map([this, sub](MonSessionMap& session_map) {
+      mon->with_session_map([sub](MonSessionMap& session_map) {
 	  session_map.remove_sub(sub);
 	});
     } else {

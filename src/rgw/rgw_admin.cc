@@ -163,9 +163,11 @@ void usage()
   cout << "  log rm                     remove log object\n";
   cout << "  usage show                 show usage (by user, date range)\n";
   cout << "  usage trim                 trim usage (by user, date range)\n";
+  cout << "  usage clear                reset all the usage stats for the cluster\n";
   cout << "  gc list                    dump expired garbage collection objects (specify\n";
   cout << "                             --include-all to list all entries, including unexpired)\n";
-  cout << "  gc process                 manually process garbage\n";
+  cout << "  gc process                 manually process garbage (specify\n";
+  cout << "                             --include-all to process all entries, including unexpired)\n";
   cout << "  lc list                    list all bucket lifecycle progress\n";
   cout << "  lc process                 manually process lifecycle\n";
   cout << "  metadata get               get metadata info\n";
@@ -206,6 +208,8 @@ void usage()
   cout << "  reshard status             read bucket resharding status\n";
   cout << "  reshard process            process of scheduled reshard jobs\n";
   cout << "  reshard cancel             cancel resharding a bucket\n";
+  cout << "  sync error list            list sync error\n";
+  cout << "  sync error trim            trim sync error\n";
   cout << "options:\n";
   cout << "   --tenant=<tenant>         tenant name\n";
   cout << "   --uid=<id>                user id\n";
@@ -377,6 +381,7 @@ enum {
   OPT_LOG_RM,
   OPT_USAGE_SHOW,
   OPT_USAGE_TRIM,
+  OPT_USAGE_CLEAR,
   OPT_OBJECT_RM,
   OPT_OBJECT_UNLINK,
   OPT_OBJECT_STAT,
@@ -440,6 +445,7 @@ enum {
   OPT_MDLOG_FETCH,
   OPT_MDLOG_STATUS,
   OPT_SYNC_ERROR_LIST,
+  OPT_SYNC_ERROR_TRIM,
   OPT_BILOG_LIST,
   OPT_BILOG_TRIM,
   OPT_BILOG_STATUS,
@@ -646,6 +652,8 @@ static int get_cmd(const char *cmd, const char *prev_cmd, const char *prev_prev_
       return OPT_USAGE_SHOW;
     if (strcmp(cmd, "trim") == 0)
       return OPT_USAGE_TRIM;
+    if (strcmp(cmd, "clear") == 0)
+      return OPT_USAGE_CLEAR;
   } else if (strcmp(prev_cmd, "caps") == 0) {
     if (strcmp(cmd, "add") == 0)
       return OPT_CAPS_ADD;
@@ -850,6 +858,8 @@ static int get_cmd(const char *cmd, const char *prev_cmd, const char *prev_prev_
 	     (strcmp(prev_cmd, "error") == 0)) {
     if (strcmp(cmd, "list") == 0)
       return OPT_SYNC_ERROR_LIST;
+    if (strcmp(cmd, "trim") == 0)
+      return OPT_SYNC_ERROR_TRIM; 
   } else if (strcmp(prev_cmd, "mdlog") == 0) {
     if (strcmp(cmd, "list") == 0)
       return OPT_MDLOG_LIST;
@@ -984,14 +994,14 @@ void dump_bi_entry(bufferlist& bl, BIIndexType index_type, Formatter *formatter)
     case InstanceIdx:
       {
         rgw_bucket_dir_entry entry;
-        ::decode(entry, iter);
+        decode(entry, iter);
         encode_json("entry", entry, formatter);
       }
       break;
     case OLHIdx:
       {
         rgw_bucket_olh_entry entry;
-        ::decode(entry, iter);
+        decode(entry, iter);
         encode_json("entry", entry, formatter);
       }
       break;
@@ -1186,7 +1196,7 @@ static bool decode_dump(const char *field_name, bufferlist& bl, Formatter *f)
   bufferlist::iterator iter = bl.begin();
 
   try {
-    ::decode(t, iter);
+    decode(t, iter);
   } catch (buffer::error& err) {
     return false;
   }
@@ -1338,7 +1348,7 @@ int check_min_obj_stripe_size(RGWRados *store, RGWBucketInfo& bucket_info, rgw_o
   try {
     bufferlist& bl = iter->second;
     bufferlist::iterator biter = bl.begin();
-    ::decode(manifest, biter);
+    decode(manifest, biter);
   } catch (buffer::error& err) {
     ldout(store->ctx(), 0) << "ERROR: failed to decode manifest" << dendl;
     return -EIO;
@@ -1943,13 +1953,16 @@ static void get_md_sync_status(list<string>& status)
   int num_full = 0;
   int num_inc = 0;
   int total_shards = 0;
+  set<int> shards_behind_set;
 
   for (auto marker_iter : sync_status.sync_markers) {
     full_total += marker_iter.second.total_entries;
     total_shards++;
+    int shard_id = marker_iter.first;
     if (marker_iter.second.state == rgw_meta_sync_marker::SyncState::FullSync) {
       num_full++;
       full_complete += marker_iter.second.pos;
+      shards_behind_set.insert(shard_id);
     } else {
       full_complete += marker_iter.second.total_entries;
     }
@@ -2001,6 +2014,7 @@ static void get_md_sync_status(list<string>& status)
       if (local_iter.second.state == rgw_meta_sync_marker::SyncState::IncrementalSync &&
           master_marker > local_iter.second.marker) {
         shards_behind[shard_id] = local_iter.second.marker;
+        shards_behind_set.insert(shard_id);
       }
     }
   }
@@ -2010,6 +2024,8 @@ static void get_md_sync_status(list<string>& status)
     push_ss(ss, status) << "metadata is caught up with master";
   } else {
     push_ss(ss, status) << "metadata is behind on " << total_behind << " shards";
+    
+    push_ss(ss, status) << "behind shards: " << "[" << shards_behind_set << "]";
 
     map<int, rgw_mdlog_shard_data> master_pos;
     ret = sync.read_master_log_shards_next(sync_status.sync_info.period, shards_behind, &master_pos);
@@ -2072,6 +2088,13 @@ static void get_data_sync_status(const string& source_zone, list<string>& status
     return;
   }
 
+  set<int> recovering_shards;
+  ret = sync.read_recovering_shards(sync_status.sync_info.num_shards, recovering_shards);
+  if (ret < 0 && ret != ENOENT) {
+    push_ss(ss, status, tab) << string("failed read recovering shards: ") + cpp_strerror(-ret);
+    return;
+  }
+
   string status_str;
   switch (sync_status.sync_info.state) {
     case rgw_data_sync_info::StateInit:
@@ -2095,13 +2118,16 @@ static void get_data_sync_status(const string& source_zone, list<string>& status
   int num_full = 0;
   int num_inc = 0;
   int total_shards = 0;
+  set<int> shards_behind_set;
 
   for (auto marker_iter : sync_status.sync_markers) {
+    int shard_id = marker_iter.first;
     full_total += marker_iter.second.total_entries;
     total_shards++;
     if (marker_iter.second.state == rgw_data_sync_marker::SyncState::FullSync) {
       num_full++;
       full_complete += marker_iter.second.pos;
+      shards_behind_set.insert(shard_id);
     } else {
       full_complete += marker_iter.second.total_entries;
     }
@@ -2149,14 +2175,18 @@ static void get_data_sync_status(const string& source_zone, list<string>& status
     if (local_iter.second.state == rgw_data_sync_marker::SyncState::IncrementalSync &&
         master_marker > local_iter.second.marker) {
       shards_behind[shard_id] = local_iter.second.marker;
+      shards_behind_set.insert(shard_id);
     }
   }
 
   int total_behind = shards_behind.size() + (sync_status.sync_info.num_shards - num_inc);
-  if (total_behind == 0) {
+  int total_recovering = recovering_shards.size();
+  if (total_behind == 0 && total_recovering == 0) {
     push_ss(ss, status, tab) << "data is caught up with source";
-  } else {
+  } else if (total_behind > 0) {
     push_ss(ss, status, tab) << "data is behind on " << total_behind << " shards";
+
+    push_ss(ss, status, tab) << "behind shards: " << "[" << shards_behind_set << "]" ;
 
     map<int, rgw_datalog_shard_data> master_pos;
     ret = sync.read_source_log_shards_next(shards_behind, &master_pos);
@@ -2181,6 +2211,11 @@ static void get_data_sync_status(const string& source_zone, list<string>& status
         push_ss(ss, status, tab) << "oldest incremental change not applied: " << oldest;
       }
     }
+  }
+
+  if (total_recovering > 0) {
+    push_ss(ss, status, tab) << total_recovering << " shards are recovering";
+    push_ss(ss, status, tab) << "recovering shards: " << "[" << recovering_shards << "]";
   }
 
   flush_ss(ss, status);
@@ -3471,7 +3506,7 @@ int main(int argc, const char **argv)
         encode_json("realm", realm, formatter);
         formatter->flush(cout);
       }
-      return 0;
+      break;
 
     case OPT_ZONEGROUP_ADD:
       {
@@ -3711,7 +3746,9 @@ int main(int argc, const char **argv)
       {
 	RGWRealm realm(realm_id, realm_name);
 	int ret = realm.init(g_ceph_context, store);
-	if (ret < 0) {
+       bool default_realm_not_exist = (ret == -ENOENT && realm_id.empty() && realm_name.empty());
+
+	if (ret < 0 && !default_realm_not_exist ) {
 	  cerr << "failed to init realm: " << cpp_strerror(-ret) << std::endl;
 	  return -ret;
 	}
@@ -3726,7 +3763,7 @@ int main(int argc, const char **argv)
 	if (ret < 0) {
 	  return 1;
 	}
-	if (zonegroup.realm_id.empty()) {
+	if (zonegroup.realm_id.empty() && !default_realm_not_exist) {
 	  zonegroup.realm_id = realm.get_id();
 	}
 	ret = zonegroup.create();
@@ -5272,6 +5309,20 @@ next:
     }
   }
 
+  if (opt_cmd == OPT_USAGE_CLEAR) {
+    if (!yes_i_really_mean_it) {
+      cerr << "usage clear would remove *all* users usage data for all time" << std::endl;
+      cerr << "do you really mean it? (requires --yes-i-really-mean-it)" << std::endl;
+      return 1;
+    }
+
+    ret = RGWUsage::clear(store);
+    if (ret < 0) {
+      return ret;
+    }
+  }
+
+
   if (opt_cmd == OPT_OLH_GET || opt_cmd == OPT_OLH_READLOG) {
     if (bucket_name.empty()) {
       cerr << "ERROR: bucket not specified" << std::endl;
@@ -5885,6 +5936,8 @@ next:
         handled = dump_string("tag", bl, formatter);
       } else if (iter->first == RGW_ATTR_ETAG) {
         handled = dump_string("etag", bl, formatter);
+      } else if (iter->first == RGW_ATTR_COMPRESSION) {
+        handled = decode_dump<RGWCompressionInfo>("compression", bl, formatter);
       }
 
       if (!handled)
@@ -5962,7 +6015,7 @@ next:
   }
 
   if (opt_cmd == OPT_GC_PROCESS) {
-    int ret = store->process_gc();
+    int ret = store->process_gc(!include_all);
     if (ret < 0) {
       cerr << "ERROR: gc processing returned error: " << cpp_strerror(-ret) << std::endl;
       return 1;
@@ -6469,9 +6522,18 @@ next:
       cerr << "ERROR: source zone not specified" << std::endl;
       return EINVAL;
     }
-    RGWDataSyncStatusManager sync(store, store->get_async_rados(), source_zone);
 
-    int ret = sync.init();
+    RGWSyncModuleInstanceRef sync_module;
+    int ret = store->get_sync_modules_manager()->create_instance(g_ceph_context, store->get_zone().tier_type, 
+        store->get_zone_params().tier_config, &sync_module);
+    if (ret < 0) {
+      lderr(cct) << "ERROR: failed to init sync module instance, ret=" << ret << dendl;
+      return ret;
+    }
+
+    RGWDataSyncStatusManager sync(store, store->get_async_rados(), source_zone, sync_module);
+
+    ret = sync.init();
     if (ret < 0) {
       cerr << "ERROR: sync.init() returned ret=" << ret << std::endl;
       return -ret;
@@ -6712,7 +6774,7 @@ next:
 
           auto iter = cls_entry.data.begin();
           try {
-            ::decode(log_entry, iter);
+            decode(log_entry, iter);
           } catch (buffer::error& err) {
             cerr << "ERROR: failed to decode log entry" << std::endl;
             continue;
@@ -6738,6 +6800,33 @@ next:
 
     formatter->close_section();
     formatter->flush(cout);
+  }
+
+  if (opt_cmd == OPT_SYNC_ERROR_TRIM) {
+    utime_t start_time, end_time;
+    int ret = parse_date_str(start_date, start_time);
+    if (ret < 0)
+      return -ret;
+
+    ret = parse_date_str(end_date, end_time);
+    if (ret < 0)
+      return -ret;
+
+    if (shard_id < 0) {
+      shard_id = 0;
+    }
+
+    for (; shard_id < ERROR_LOGGER_SHARDS; ++shard_id) {
+      string oid = RGWSyncErrorLogger::get_shard_oid(RGW_SYNC_ERROR_LOG_SHARD_PREFIX, shard_id);
+      ret = store->time_log_trim(oid, start_time.to_real_time(), end_time.to_real_time(), start_marker, end_marker);
+      if (ret < 0 && ret != -ENODATA) {
+        cerr << "ERROR: sync error trim: " << cpp_strerror(-ret) << std::endl;
+        return -ret;
+      }
+      if (specified_shard_id) {
+        break;
+      }
+    }
   }
 
   if (opt_cmd == OPT_BILOG_TRIM) {

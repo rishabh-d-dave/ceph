@@ -328,7 +328,7 @@ void MonClient::handle_monmap(MMonMap *m)
   string cur_mon = monmap.get_name(peer);
 
   bufferlist::iterator p = m->monmapbl.begin();
-  ::decode(monmap, p);
+  decode(monmap, p);
 
   ldout(cct, 10) << " got monmap " << monmap.epoch
 		 << ", mon." << cur_mon << " is now rank " << monmap.get_rank(cur_mon)
@@ -366,7 +366,8 @@ int MonClient::init()
     method = cct->_conf->auth_supported;
   else if (entity_name.get_type() == CEPH_ENTITY_TYPE_OSD ||
 	   entity_name.get_type() == CEPH_ENTITY_TYPE_MDS ||
-	   entity_name.get_type() == CEPH_ENTITY_TYPE_MON)
+	   entity_name.get_type() == CEPH_ENTITY_TYPE_MON ||
+	   entity_name.get_type() == CEPH_ENTITY_TYPE_MGR)
     method = cct->_conf->auth_cluster_required;
   else
     method = cct->_conf->auth_client_required;
@@ -1205,10 +1206,10 @@ void MonConnection::start(epoch_t epoch,
   m->protocol = 0;
   m->monmap_epoch = epoch;
   __u8 struct_v = 1;
-  ::encode(struct_v, m->auth_payload);
-  ::encode(auth_supported.get_supported_set(), m->auth_payload);
-  ::encode(entity_name, m->auth_payload);
-  ::encode(global_id, m->auth_payload);
+  encode(struct_v, m->auth_payload);
+  encode(auth_supported.get_supported_set(), m->auth_payload);
+  encode(entity_name, m->auth_payload);
+  encode(global_id, m->auth_payload);
   con->send_message(m);
 }
 

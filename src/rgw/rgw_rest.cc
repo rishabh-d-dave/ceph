@@ -165,59 +165,6 @@ string uppercase_underscore_http_attr(const string& orig)
   return string(buf);
 }
 
-/*
- * make attrs look-like-this
- * converts underscores to dashes
- */
-string lowercase_dash_http_attr(const string& orig)
-{
-  const char *s = orig.c_str();
-  char buf[orig.size() + 1];
-  buf[orig.size()] = '\0';
-
-  for (size_t i = 0; i < orig.size(); ++i, ++s) {
-    switch (*s) {
-      case '_':
-        buf[i] = '-';
-        break;
-      default:
-        buf[i] = tolower(*s);
-    }
-  }
-  return string(buf);
-}
-
-/*
- * make attrs Look-Like-This
- * converts underscores to dashes
- */
-string camelcase_dash_http_attr(const string& orig)
-{
-  const char *s = orig.c_str();
-  char buf[orig.size() + 1];
-  buf[orig.size()] = '\0';
-
-  bool last_sep = true;
-
-  for (size_t i = 0; i < orig.size(); ++i, ++s) {
-    switch (*s) {
-      case '_':
-      case '-':
-        buf[i] = '-';
-        last_sep = true;
-        break;
-      default:
-        if (last_sep) {
-          buf[i] = toupper(*s);
-        } else {
-          buf[i] = tolower(*s);
-        }
-        last_sep = false;
-    }
-  }
-  return string(buf);
-}
-
 /* avoid duplicate hostnames in hostnames lists */
 static set<string> hostnames_set;
 static set<string> hostnames_s3website_set;
@@ -489,31 +436,6 @@ void dump_bucket_from_state(struct req_state *s)
     } else {
       dump_header(s, "Bucket", url_encode(s->bucket_name));
     }
-  }
-}
-
-void dump_uri_from_state(struct req_state *s)
-{
-  if (strcmp(s->info.request_uri.c_str(), "/") == 0) {
-
-    string location = "http://";
-    string server = s->info.env->get("SERVER_NAME", "<SERVER_NAME>");
-    location.append(server);
-    location += "/";
-    if (!s->bucket_name.empty()) {
-      if (!s->bucket_tenant.empty()) {
-        location += s->bucket_tenant;
-        location += ":";
-      }
-      location += s->bucket_name;
-      location += "/";
-      if (!s->object.empty()) {
-	location += s->object.name;
-	dump_header(s, "Location", location);
-      }
-    }
-  } else {
-    dump_header_quoted(s, "Location", s->info.request_uri);
   }
 }
 
@@ -1171,9 +1093,6 @@ int RGWPutObj_ObjStore::get_data(bufferlist& bl)
     return -ERR_TOO_LARGE;
   }
 
-  if (!ofs)
-    supplied_md5_b64 = s->info.env->get("HTTP_CONTENT_MD5");
-
   return len;
 }
 
@@ -1697,7 +1616,7 @@ int RGWListBucketMultiparts_ObjStore::get_params()
 {
   delimiter = s->info.args.get("delimiter");
   prefix = s->info.args.get("prefix");
-  string str = s->info.args.get("max-parts");
+  string str = s->info.args.get("max-uploads");
   if (!str.empty())
     max_uploads = atoi(str.c_str());
   else

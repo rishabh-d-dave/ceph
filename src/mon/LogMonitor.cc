@@ -93,7 +93,7 @@ void LogMonitor::update_from_paxos(bool *need_bootstrap)
     assert(latest_bl.length() != 0);
     dout(7) << __func__ << " loading summary e" << latest_full << dendl;
     bufferlist::iterator p = latest_bl.begin();
-    ::decode(summary, p);
+    decode(summary, p);
     dout(7) << __func__ << " loaded summary e" << summary.version << dendl;
   }
 
@@ -106,7 +106,7 @@ void LogMonitor::update_from_paxos(bool *need_bootstrap)
 
     bufferlist::iterator p = bl.begin();
     __u8 v;
-    ::decode(v, p);
+    decode(v, p);
     while (!p.end()) {
       LogEntry le;
       le.decode(p);
@@ -115,6 +115,10 @@ void LogMonitor::update_from_paxos(bool *need_bootstrap)
       string channel = le.channel;
       if (channel.empty()) // keep retrocompatibility
         channel = CLOG_CHANNEL_CLUSTER;
+
+      if (g_conf->get_val<bool>("mon_cluster_log_to_stderr")) {
+	cerr << channel << " " << le << std::endl;
+      }
 
       if (channels.do_log_to_syslog(channel)) {
         string level = channels.get_level(channel);
@@ -213,7 +217,7 @@ void LogMonitor::encode_pending(MonitorDBStore::TransactionRef t)
   bufferlist bl;
   dout(10) << __func__ << " v" << version << dendl;
   __u8 v = 1;
-  ::encode(v, bl);
+  encode(v, bl);
   multimap<utime_t,LogEntry>::iterator p;
   for (p = pending_log.begin(); p != pending_log.end(); ++p)
     p->second.encode(bl, mon->get_quorum_con_features());
@@ -228,7 +232,7 @@ void LogMonitor::encode_full(MonitorDBStore::TransactionRef t)
   assert(get_last_committed() == summary.version);
 
   bufferlist summary_bl;
-  ::encode(summary, summary_bl, mon->get_quorum_con_features());
+  encode(summary, summary_bl, mon->get_quorum_con_features());
 
   put_version_full(t, summary.version, summary_bl);
   put_version_latest_full(t, summary.version);
@@ -378,7 +382,7 @@ bool LogMonitor::preprocess_command(MonOpRequestRef op)
   bufferlist rdata;
   stringstream ss;
 
-  map<string, cmd_vartype> cmdmap;
+  cmdmap_t cmdmap;
   if (!cmdmap_from_json(m->cmd, &cmdmap, ss)) {
     string rs = ss.str();
     mon->reply_command(op, -EINVAL, rs, get_last_committed());
@@ -475,7 +479,7 @@ bool LogMonitor::prepare_command(MonOpRequestRef op)
   string rs;
   int err = -EINVAL;
 
-  map<string, cmd_vartype> cmdmap;
+  cmdmap_t cmdmap;
   if (!cmdmap_from_json(m->cmd, &cmdmap, ss)) {
     // ss has reason for failure
     string rs = ss.str();
@@ -650,7 +654,7 @@ void LogMonitor::_create_sub_incremental(MLog *mlog, int level, version_t sv)
     assert(bl.length());
     bufferlist::iterator p = bl.begin();
     __u8 v;
-    ::decode(v,p);
+    decode(v,p);
     while (!p.end()) {
       LogEntry le;
       le.decode(p);

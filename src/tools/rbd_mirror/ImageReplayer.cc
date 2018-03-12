@@ -200,8 +200,8 @@ public:
     commands.clear();
   }
 
-  bool call(std::string command, cmdmap_t& cmdmap, std::string format,
-	    bufferlist& out) override {
+  bool call(std::string_view command, const cmdmap_t& cmdmap,
+	    std::string_view format, bufferlist& out) override {
     auto i = commands.find(command);
     assert(i != commands.end());
     Formatter *f = Formatter::create(format);
@@ -213,7 +213,8 @@ public:
   }
 
 private:
-  typedef std::map<std::string, ImageReplayerAdminSocketCommand<I> *> Commands;
+  typedef std::map<std::string, ImageReplayerAdminSocketCommand<I>*,
+		   std::less<>> Commands;
 
   AdminSocket *admin_socket;
   Commands commands;
@@ -258,14 +259,12 @@ void ImageReplayer<I>::RemoteJournalerListener::handle_update(
 
 template <typename I>
 ImageReplayer<I>::ImageReplayer(Threads<I> *threads,
-                                ImageDeleter<I>* image_deleter,
                                 InstanceWatcher<I> *instance_watcher,
                                 RadosRef local,
                                 const std::string &local_mirror_uuid,
                                 int64_t local_pool_id,
                                 const std::string &global_image_id) :
   m_threads(threads),
-  m_image_deleter(image_deleter),
   m_instance_watcher(instance_watcher),
   m_local(local),
   m_local_mirror_uuid(local_mirror_uuid),
@@ -391,31 +390,6 @@ void ImageReplayer<I>::start(Context *on_finish, bool manual)
     return;
   }
 
-  wait_for_deletion();
-}
-
-template <typename I>
-void ImageReplayer<I>::wait_for_deletion() {
-  dout(20) << dendl;
-
-  Context *ctx = create_context_callback<
-    ImageReplayer, &ImageReplayer<I>::handle_wait_for_deletion>(this);
-  m_image_deleter->wait_for_scheduled_deletion(
-    m_local_pool_id, m_global_image_id, ctx, false);
-}
-
-template <typename I>
-void ImageReplayer<I>::handle_wait_for_deletion(int r) {
-  dout(20) << "r=" << r << dendl;
-
-  if (r == -ECANCELED) {
-    on_start_fail(0, "");
-    return;
-  } else if (r < 0) {
-    on_start_fail(r, "error waiting for image deletion");
-    return;
-  }
-
   prepare_local_image();
 }
 
@@ -481,7 +455,7 @@ void ImageReplayer<I>::handle_prepare_remote_image(int r) {
     dout(20) << "remote image does not exist" << dendl;
 
     // TODO need to support multiple remote images
-    if (!m_local_image_id.empty() &&
+    if (m_remote_image.image_id.empty() && !m_local_image_id.empty() &&
         m_local_image_tag_owner == m_remote_image.mirror_uuid) {
       // local image exists and is non-primary and linked to the missing
       // remote image
@@ -743,8 +717,6 @@ void ImageReplayer<I>::stop(Context *on_finish, bool manual, int r,
 {
   dout(20) << "on_finish=" << on_finish << ", manual=" << manual
 	   << ", desc=" << desc << dendl;
-
-  m_image_deleter->cancel_waiter(m_local_pool_id, m_global_image_id);
 
   image_replayer::BootstrapRequest<I> *bootstrap_request = nullptr;
   bool shut_down_replay = false;
@@ -1066,7 +1038,7 @@ void ImageReplayer<I>::handle_get_remote_tag(int r) {
   if (r == 0) {
     try {
       bufferlist::iterator it = m_replay_tag.data.begin();
-      ::decode(m_replay_tag_data, it);
+      decode(m_replay_tag_data, it);
     } catch (const buffer::error &err) {
       r = -EBADMSG;
     }
@@ -1321,8 +1293,8 @@ void ImageReplayer<I>::send_mirror_status_update(const OptionalState &opt_state)
   int last_r;
   bool stopping_replay;
 
-  OptionalMirrorImageStatusState mirror_image_status_state{
-    boost::make_optional(false, cls::rbd::MirrorImageStatusState{})};
+  OptionalMirrorImageStatusState mirror_image_status_state =
+    boost::make_optional(false, cls::rbd::MIRROR_IMAGE_STATUS_STATE_UNKNOWN);
   image_replayer::BootstrapRequest<I>* bootstrap_request = nullptr;
   {
     Mutex::Locker locker(m_lock);
@@ -1384,7 +1356,8 @@ void ImageReplayer<I>::send_mirror_status_update(const OptionalState &opt_state)
         return;
       }
       status.description = "replaying, " + desc;
-      mirror_image_status_state = boost::none;
+      mirror_image_status_state = boost::make_optional(
+        false, cls::rbd::MIRROR_IMAGE_STATUS_STATE_UNKNOWN);
     }
     break;
   case STATE_STOPPING:
@@ -1633,6 +1606,8 @@ template <typename I>
 void ImageReplayer<I>::handle_shut_down(int r) {
   reschedule_update_status_task(-1);
 
+  bool resync_requested = false;
+  bool delete_requested = false;
   bool unregister_asok_hook = false;
   {
     Mutex::Locker locker(m_lock);
@@ -1650,22 +1625,16 @@ void ImageReplayer<I>::handle_shut_down(int r) {
       return;
     }
 
-    bool delete_requested = false;
     if (m_delete_requested && !m_local_image_id.empty()) {
       assert(m_remote_image.image_id.empty());
       dout(0) << "remote image no longer exists: scheduling deletion" << dendl;
-      delete_requested = true;
+      unregister_asok_hook = true;
+      std::swap(delete_requested, m_delete_requested);
     }
-    if (delete_requested || m_resync_requested) {
-      m_image_deleter->schedule_image_delete(m_local_ioctx, m_global_image_id,
-                                             m_resync_requested, nullptr);
 
+    std::swap(resync_requested, m_resync_requested);
+    if (delete_requested || resync_requested) {
       m_local_image_id = "";
-      m_resync_requested = false;
-      if (m_delete_requested) {
-        unregister_asok_hook = true;
-        m_delete_requested = false;
-      }
     } else if (m_last_r == -ENOENT &&
                m_local_image_id.empty() && m_remote_image.image_id.empty()) {
       dout(0) << "mirror image no longer exists" << dendl;
@@ -1676,6 +1645,16 @@ void ImageReplayer<I>::handle_shut_down(int r) {
 
   if (unregister_asok_hook) {
     unregister_admin_socket_hook();
+  }
+
+  if (delete_requested || resync_requested) {
+    dout(5) << "moving image to trash" << dendl;
+    auto ctx = new FunctionContext([this, r](int) {
+      handle_shut_down(r);
+    });
+    ImageDeleter<I>::trash_move(*m_local_ioctx, m_global_image_id,
+                                resync_requested, m_threads->work_queue, ctx);
+    return;
   }
 
   dout(20) << "stop complete" << dendl;

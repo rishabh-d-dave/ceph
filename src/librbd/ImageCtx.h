@@ -129,6 +129,8 @@ namespace librbd {
     cls::rbd::GroupSpec group_spec;
     uint64_t stripe_unit, stripe_count;
     uint64_t flags;
+    uint64_t op_features = 0;
+    bool operations_disabled = false;
     utime_t create_timestamp;
 
     file_layout_t layout;
@@ -196,6 +198,7 @@ namespace librbd {
     uint32_t journal_max_payload_bytes;
     int journal_max_concurrent_object_sets;
     bool mirroring_resync_after_disconnect;
+    uint64_t mirroring_delete_delay;
     int mirroring_replay_delay;
     bool skip_partial_discard;
     bool blkin_trace_all;
@@ -240,8 +243,8 @@ namespace librbd {
     int snap_set(cls::rbd::SnapshotNamespace in_snap_namespace,
 		 std::string in_snap_name);
     void snap_unset();
-    librados::snap_t get_snap_id(cls::rbd::SnapshotNamespace in_snap_namespace,
-				 std::string in_snap_name) const;
+    librados::snap_t get_snap_id(const cls::rbd::SnapshotNamespace& in_snap_namespace,
+                                 const std::string& in_snap_name) const;
     const SnapInfo* get_snap_info(librados::snap_t in_snap_id) const;
     int get_snap_name(librados::snap_t in_snap_id,
 		      std::string *out_snap_name) const;
@@ -275,6 +278,9 @@ namespace librbd {
     bool test_features(uint64_t test_features) const;
     bool test_features(uint64_t test_features,
                        const RWLock &in_snap_lock) const;
+    bool test_op_features(uint64_t op_features) const;
+    bool test_op_features(uint64_t op_features,
+                          const RWLock &in_snap_lock) const;
     int get_flags(librados::snap_t in_snap_id, uint64_t *flags) const;
     int test_flags(uint64_t test_flags, bool *flags_set) const;
     int test_flags(uint64_t test_flags, const RWLock &in_snap_lock,

@@ -1266,7 +1266,6 @@ function test_mon_osd_create_destroy()
   ceph osd rm $id2
   ceph osd setmaxosd $old_maxosd
 
-  ceph osd new $uuid -i $bad_json 2>&1 | grep 'EINVAL'
   ceph osd new $uuid -i $no_cephx 2>&1 | grep 'EINVAL'
   ceph osd new $uuid -i $no_lockbox 2>&1 | grep 'EINVAL'
 
@@ -1416,6 +1415,11 @@ function test_mon_osd()
   #
   # osd scrub
   #
+
+  # blocking
+  ceph osd scrub 0 --block
+  ceph osd deep-scrub 0 --block
+
   # how do I tell when these are done?
   ceph osd scrub 0
   ceph osd deep-scrub 0
@@ -1703,6 +1707,17 @@ function test_mon_osd_pool()
   set -e
   ceph osd pool delete replicated replicated --yes-i-really-really-mean-it
   ceph osd pool delete ec_test ec_test --yes-i-really-really-mean-it
+
+  # test create pool with rule
+  ceph osd erasure-code-profile set foo foo
+  ceph osd erasure-code-profile ls | grep foo
+  ceph osd crush rule create-erasure foo foo
+  ceph osd pool create erasure 12 12 erasure foo
+  expect_false ceph osd erasure-code-profile rm foo
+  ceph osd pool delete erasure erasure --yes-i-really-really-mean-it
+  ceph osd crush rule rm foo
+  ceph osd erasure-code-profile rm foo
+
 }
 
 function test_mon_osd_pool_quota()
@@ -2331,7 +2346,7 @@ function test_mon_cephdf_commands()
   # pool section:
   # RAW USED The near raw used per pool in raw total
 
-  ceph osd pool create cephdf_for_test 32 32 replicated
+  ceph osd pool create cephdf_for_test 1 1 replicated
   ceph osd pool application enable cephdf_for_test rados
   ceph osd pool set cephdf_for_test size 2
 

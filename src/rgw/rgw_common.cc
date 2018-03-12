@@ -36,9 +36,6 @@
 #define dout_context g_ceph_context
 #define dout_subsys ceph_subsys_rgw
 
-using boost::none;
-using boost::optional;
-
 using rgw::IAM::ARN;
 using rgw::IAM::Effect;
 using rgw::IAM::op_to_perm;
@@ -75,6 +72,7 @@ rgw_http_errors rgw_http_s3_errors({
     { ERR_TOO_MANY_BUCKETS, {400, "TooManyBuckets" }},
     { ERR_MALFORMED_XML, {400, "MalformedXML" }},
     { ERR_AMZ_CONTENT_SHA256_MISMATCH, {400, "XAmzContentSHA256Mismatch" }},
+    { ERR_MALFORMED_DOC, {400, "MalformedPolicyDocument"}},
     { ERR_INVALID_TAG, {400, "InvalidTag"}},
     { ERR_MALFORMED_ACL_ERROR, {400, "MalformedACLError" }},
     { ERR_INVALID_ENCRYPTION_ALGORITHM, {400, "InvalidEncryptionAlgorithmError" }},
@@ -94,6 +92,7 @@ rgw_http_errors rgw_http_s3_errors({
     { ERR_NO_SUCH_LC, {404, "NoSuchLifecycleConfiguration"}},
     { ERR_NO_SUCH_BUCKET_POLICY, {404, "NoSuchBucketPolicy"}},
     { ERR_NO_SUCH_USER, {404, "NoSuchUser"}},
+    { ERR_NO_ROLE_FOUND, {404, "NoSuchEntity"}},
     { ERR_NO_SUCH_SUBUSER, {404, "NoSuchSubUser"}},
     { ERR_METHOD_NOT_ALLOWED, {405, "MethodNotAllowed" }},
     { ETIMEDOUT, {408, "RequestTimeout" }},
@@ -102,6 +101,8 @@ rgw_http_errors rgw_http_s3_errors({
     { ERR_EMAIL_EXIST, {409, "EmailExists" }},
     { ERR_KEY_EXIST, {409, "KeyExists"}},
     { ERR_TAG_CONFLICT, {409, "OperationAborted"}},
+    { ERR_ROLE_EXISTS, {409, "EntityAlreadyExists"}},
+    { ERR_DELETE_CONFLICT, {409, "DeleteConflict"}},
     { ERR_INVALID_SECRET_KEY, {400, "InvalidSecretKey"}},
     { ERR_INVALID_KEY_TYPE, {400, "InvalidKeyType"}},
     { ERR_INVALID_CAP, {400, "InvalidCapability"}},
@@ -137,6 +138,10 @@ rgw_http_errors rgw_http_swift_errors({
 int rgw_perf_start(CephContext *cct)
 {
   PerfCountersBuilder plb(cct, cct->_conf->name.to_str(), l_rgw_first, l_rgw_last);
+
+  // RGW emits comparatively few metrics, so let's be generous
+  // and mark them all USEFUL to get transmission to ceph-mgr by default.
+  plb.set_prio_default(PerfCountersBuilder::PRIO_USEFUL);
 
   plb.add_u64_counter(l_rgw_req, "req", "Requests");
   plb.add_u64_counter(l_rgw_failed_req, "failed_req", "Aborted requests");
@@ -1087,11 +1092,11 @@ bool verify_requester_payer_permission(struct req_state *s)
 }
 
 namespace {
-Effect eval_or_pass(const optional<Policy>& policy,
-			   const rgw::IAM::Environment& env,
-			   const rgw::auth::Identity& id,
-			   const uint64_t op,
-			   const ARN& arn) {
+Effect eval_or_pass(const boost::optional<Policy>& policy,
+		    const rgw::IAM::Environment& env,
+		    const rgw::auth::Identity& id,
+		    const uint64_t op,
+		    const ARN& arn) {
   if (!policy)
     return Effect::Pass;
   else
@@ -1103,7 +1108,7 @@ bool verify_bucket_permission(struct req_state * const s,
 			      const rgw_bucket& bucket,
                               RGWAccessControlPolicy * const user_acl,
                               RGWAccessControlPolicy * const bucket_acl,
-			      const optional<Policy>& bucket_policy,
+			      const boost::optional<Policy>& bucket_policy,
                               const uint64_t op)
 {
   if (!verify_requester_payer_permission(s))
@@ -1188,7 +1193,7 @@ static inline bool check_deferred_bucket_perms(struct req_state * const s,
 					       const rgw_bucket& bucket,
 					       RGWAccessControlPolicy * const user_acl,
 					       RGWAccessControlPolicy * const bucket_acl,
-					       const optional<Policy>& bucket_policy,
+					       const boost::optional<Policy>& bucket_policy,
 					       const uint8_t deferred_check,
 					       const uint64_t op)
 {
@@ -1211,7 +1216,7 @@ bool verify_object_permission(struct req_state * const s,
                               RGWAccessControlPolicy * const user_acl,
                               RGWAccessControlPolicy * const bucket_acl,
                               RGWAccessControlPolicy * const object_acl,
-                              const optional<Policy>& bucket_policy,
+                              const boost::optional<Policy>& bucket_policy,
                               const uint64_t op)
 {
   if (!verify_requester_payer_permission(s))
@@ -1737,7 +1742,8 @@ bool RGWUserCaps::is_valid_cap_type(const string& tp)
                                     "bilog",
                                     "mdlog",
                                     "datalog",
-                                    "opstate" };
+                                    "opstate",
+                                    "roles"};
 
   for (unsigned int i = 0; i < sizeof(cap_type) / sizeof(char *); ++i) {
     if (tp.compare(cap_type[i]) == 0) {
@@ -1818,18 +1824,18 @@ string rgw_pool::to_str() const
 
 void rgw_raw_obj::decode_from_rgw_obj(bufferlist::iterator& bl)
 {
+  using ceph::decode;
   rgw_obj old_obj;
-  ::decode(old_obj, bl);
+  decode(old_obj, bl);
 
   get_obj_bucket_and_oid_loc(old_obj, oid, loc);
   pool = old_obj.get_explicit_data_pool();
 }
 
-std::string rgw_bucket::get_key(char tenant_delim, char id_delim) const
+std::string rgw_bucket::get_key(char tenant_delim, char id_delim, size_t reserve) const
 {
-  static constexpr size_t shard_len{12}; // ":4294967295\0"
   const size_t max_len = tenant.size() + sizeof(tenant_delim) +
-      name.size() + sizeof(id_delim) + bucket_id.size() + shard_len;
+      name.size() + sizeof(id_delim) + bucket_id.size() + reserve;
 
   std::string key;
   key.reserve(max_len);
@@ -1848,7 +1854,8 @@ std::string rgw_bucket::get_key(char tenant_delim, char id_delim) const
 std::string rgw_bucket_shard::get_key(char tenant_delim, char id_delim,
                                       char shard_delim) const
 {
-  auto key = bucket.get_key(tenant_delim, id_delim);
+  static constexpr size_t shard_len{12}; // ":4294967295\0"
+  auto key = bucket.get_key(tenant_delim, id_delim, shard_len);
   if (shard_id >= 0 && shard_delim) {
     key.append(1, shard_delim);
     key.append(std::to_string(shard_id));
@@ -1894,4 +1901,57 @@ bool match_policy(boost::string_view pattern, boost::string_view input,
     last_pos_pattern = cur_pos_pattern + 1;
     last_pos_input = cur_pos_input + 1;
   }
+}
+
+/*
+ * make attrs look-like-this
+ * converts underscores to dashes
+ */
+string lowercase_dash_http_attr(const string& orig)
+{
+  const char *s = orig.c_str();
+  char buf[orig.size() + 1];
+  buf[orig.size()] = '\0';
+
+  for (size_t i = 0; i < orig.size(); ++i, ++s) {
+    switch (*s) {
+      case '_':
+        buf[i] = '-';
+        break;
+      default:
+        buf[i] = tolower(*s);
+    }
+  }
+  return string(buf);
+}
+
+/*
+ * make attrs Look-Like-This
+ * converts underscores to dashes
+ */
+string camelcase_dash_http_attr(const string& orig)
+{
+  const char *s = orig.c_str();
+  char buf[orig.size() + 1];
+  buf[orig.size()] = '\0';
+
+  bool last_sep = true;
+
+  for (size_t i = 0; i < orig.size(); ++i, ++s) {
+    switch (*s) {
+      case '_':
+      case '-':
+        buf[i] = '-';
+        last_sep = true;
+        break;
+      default:
+        if (last_sep) {
+          buf[i] = toupper(*s);
+        } else {
+          buf[i] = tolower(*s);
+        }
+        last_sep = false;
+    }
+  }
+  return string(buf);
 }

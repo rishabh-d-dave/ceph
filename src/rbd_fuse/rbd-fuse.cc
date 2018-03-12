@@ -66,8 +66,7 @@ struct rbd_openimage {
 #define MAX_RBD_IMAGES		128
 struct rbd_openimage opentbl[MAX_RBD_IMAGES];
 
-struct rbd_options rbd_options = {(char*) "/etc/ceph/ceph.conf", (char*) "rbd",
-				  NULL};
+struct rbd_options rbd_options = {NULL, (char*) "rbd", NULL};
 
 #define rbdsize(fd)	opentbl[fd].rbd_stat.rbd_info.size
 #define rbdblksize(fd)	opentbl[fd].rbd_stat.rbd_info.obj_size
@@ -812,10 +811,6 @@ static int rbdfs_opt_proc(void *data, const char *arg, int key,
 	}
 
 	if (key == KEY_CEPH_CONFIG) {
-		if (rbd_options.ceph_config != NULL) {
-			free(rbd_options.ceph_config);
-			rbd_options.ceph_config = NULL;
-		}
 		rbd_options.ceph_config = strdup(arg+2);
 		return 0;
 	}
@@ -853,17 +848,6 @@ connect_to_cluster(rados_t *pcluster)
 {
 	int r;
 
-	r = rados_create(pcluster, NULL);
-	if (r < 0) {
-		simple_err("Could not create cluster handle", r);
-		return r;
-	}
-	rados_conf_parse_env(*pcluster, NULL);
-	r = rados_conf_read_file(*pcluster, rbd_options.ceph_config);
-	if (r < 0) {
-		simple_err("Error reading Ceph config file", r);
-		goto failed_shutdown;
-	}
 	r = rados_connect(*pcluster);
 	if (r < 0) {
 		simple_err("Error connecting to cluster", r);
@@ -877,11 +861,72 @@ failed_shutdown:
 	return r;
 }
 
+int init_cluster(int argc, char **argv, int *remargc, char **remargv)
+{
+	int r;
+
+	r = rados_create(&cluster, NULL);
+	if (r < 0) {
+		simple_err("Could not create cluster handle", r);
+		return r;
+	}
+
+	r = rados_conf_parse_argv_remainder(cluster, argc, (const char **)
+						argv, (const char **) remargv);
+	if (r < 0) {
+		simple_err("Error parsing the arguments", r);
+		return r;
+	}
+
+	for (*remargc = 0; *remargc < argc and remargv[*remargc] != NULL;
+		++(*remargc))
+		;
+
+	return 0;
+}
+
+int post_init_cluster(int argc, char **argv)
+{
+	int r;
+
+	r = rados_conf_read_file(cluster, rbd_options.ceph_config);
+	if (r < 0) {
+		simple_err("Error reading Ceph config file", r);
+		return r;
+	}
+
+	r = rados_conf_parse_env(cluster, NULL);
+	if (r < 0) {
+		simple_err("Error parsing the environment", r);
+		return r;
+	}
+
+	r = rados_conf_parse_argv(cluster, argc, (const char **) argv);
+	if (r < 0) {
+		simple_err("Error parsing the environment", r);
+		return r;
+	}
+
+	return 0;
+}
+
 int main(int argc, char *argv[])
 {
-	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+	int remargc;
+	char *remargv[argc] = {NULL};
+	int r = init_cluster(argc, argv, &remargc, remargv);
+	if (r < 0) {
+		exit(1);
+	}
+	struct fuse_args args = FUSE_ARGS_INIT(remargc, remargv);
 
-	if (fuse_opt_parse(&args, &rbd_options, rbdfs_opts, rbdfs_opt_proc) == -1) {
+	if (fuse_opt_parse(&args, &rbd_options, rbdfs_opts,
+				rbdfs_opt_proc) == -1) {
+		exit(1);
+	}
+
+	r = post_init_cluster(argc, argv);
+	if (r < 0) {
 		exit(1);
 	}
 

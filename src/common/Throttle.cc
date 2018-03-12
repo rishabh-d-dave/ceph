@@ -6,7 +6,6 @@
 #include "common/Throttle.h"
 #include "common/ceph_time.h"
 #include "common/perf_counters.h"
-#include "common/Throttle.h"
 
 
 // re-include our assert to clobber the system one; fix dout:
@@ -77,7 +76,7 @@ Throttle::~Throttle()
 void Throttle::_reset_max(int64_t m)
 {
   // lock must be held.
-  if (static_cast<int64_t>(max) == m)
+  if (max == m)
     return;
   if (!conds.empty())
     conds.front().notify_one();
@@ -223,7 +222,7 @@ int64_t Throttle::put(int64_t c)
     if (!conds.empty())
       conds.front().notify_one();
     // if count goes negative, we failed somewhere!
-    assert(static_cast<int64_t>(count) >= c);
+    assert(count >= c);
     count -= c;
     if (logger) {
       logger->inc(l_throttle_put);
@@ -578,7 +577,7 @@ C_OrderedThrottle *OrderedThrottle::start_op(Context *on_finish) {
   auto l = uniquely_lock(m_lock);
   uint64_t tid = m_next_tid++;
   m_tid_result[tid] = Result(on_finish);
-  auto ctx = make_unique<C_OrderedThrottle>(this, tid);
+  auto ctx = std::make_unique<C_OrderedThrottle>(this, tid);
 
   complete_pending_ops(l);
   while (m_max == m_current) {

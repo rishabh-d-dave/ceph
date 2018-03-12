@@ -441,6 +441,22 @@ uint64_t librados::RadosClient::get_instance_id()
   return instance_id;
 }
 
+int librados::RadosClient::get_min_compatible_client(int8_t* min_compat_client,
+                                                     int8_t* require_min_compat_client)
+{
+  int r = wait_for_osdmap();
+  if (r < 0) {
+    return r;
+  }
+
+  objecter->with_osdmap(
+    [min_compat_client, require_min_compat_client](const OSDMap& o) {
+      *min_compat_client = o.get_min_compat_client();
+      *require_min_compat_client = o.get_require_min_compat_client();
+    });
+  return 0;
+}
+
 librados::RadosClient::~RadosClient()
 {
   if (messenger)
@@ -550,14 +566,12 @@ int librados::RadosClient::wait_for_osdmap()
 
     if (objecter->with_osdmap(std::mem_fn(&OSDMap::get_epoch)) == 0) {
       ldout(cct, 10) << __func__ << " waiting" << dendl;
-      utime_t start = ceph_clock_now();
       while (objecter->with_osdmap(std::mem_fn(&OSDMap::get_epoch)) == 0) {
         if (timeout.is_zero()) {
           cond.Wait(lock);
         } else {
-          cond.WaitInterval(lock, timeout);
-          utime_t elapsed = ceph_clock_now() - start;
-          if (elapsed > timeout) {
+          int r = cond.WaitInterval(lock, timeout);
+          if (r == ETIMEDOUT) {
             lderr(cct) << "timed out waiting for first osdmap from monitors"
                        << dendl;
             return -ETIMEDOUT;

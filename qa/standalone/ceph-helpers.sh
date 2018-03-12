@@ -430,6 +430,7 @@ function run_mon() {
 
     ceph-mon \
         --id $id \
+	--osd-failsafe-full-ratio=.99 \
         --mon-osd-full-ratio=.99 \
         --mon-data-avail-crit=1 \
         --mon-data-avail-warn=5 \
@@ -520,6 +521,7 @@ function run_mgr() {
     ceph-mgr \
         --id $id \
         $EXTRA_OPTS \
+	--osd-failsafe-full-ratio=.99 \
         --debug-mgr 20 \
 	--debug-objecter 20 \
         --debug-ms 20 \
@@ -574,6 +576,7 @@ function run_osd() {
     local osd_data=$dir/$id
 
     local ceph_disk_args
+    ceph_disk_args+=" --verbose"
     ceph_disk_args+=" --statedir=$dir"
     ceph_disk_args+=" --sysconfdir=$dir"
     ceph_disk_args+=" --prepend-to-path="
@@ -593,6 +596,7 @@ function run_osd_bluestore() {
     local osd_data=$dir/$id
 
     local ceph_disk_args
+    ceph_disk_args+=" --verbose"
     ceph_disk_args+=" --statedir=$dir"
     ceph_disk_args+=" --sysconfdir=$dir"
     ceph_disk_args+=" --prepend-to-path="
@@ -712,6 +716,7 @@ function activate_osd() {
     local osd_data=$dir/$id
 
     local ceph_disk_args
+    ceph_disk_args+=" --verbose"
     ceph_disk_args+=" --statedir=$dir"
     ceph_disk_args+=" --sysconfdir=$dir"
     ceph_disk_args+=" --prepend-to-path="
@@ -728,9 +733,9 @@ function activate_osd() {
     ceph_args+=" --debug-osd=20"
     ceph_args+=" --log-file=$dir/\$name.log"
     ceph_args+=" --pid-file=$dir/\$name.pid"
-    ceph_args+=" --osd-max-object-name-len 460"
-    ceph_args+=" --osd-max-object-namespace-len 64"
-    ceph_args+=" --enable-experimental-unrecoverable-data-corrupting-features *"
+    ceph_args+=" --osd-max-object-name-len=460"
+    ceph_args+=" --osd-max-object-namespace-len=64"
+    ceph_args+=" --enable-experimental-unrecoverable-data-corrupting-features=*"
     ceph_args+=" "
     ceph_args+="$@"
     mkdir -p $osd_data
@@ -1392,6 +1397,7 @@ function wait_for_clean() {
     local -a delays=($(get_timeout_delays $TIMEOUT .1))
     local -i loop=0
 
+    flush_pg_stats
     while test $(get_num_pgs) == 0 ; do
 	sleep 1
     done
@@ -1727,11 +1733,17 @@ function test_display_logs() {
 #
 function run_in_background() {
     local pid_variable=$1
-    shift;
+    shift
     # Execute the command and prepend the output with its pid
     # We enforce to return the exit status of the command and not the awk one.
-    ("$@" |& awk '{ a[i++] = $0 }END{for (i = 0; i in a; ++i) { print "'$$': " a[i]} }'; return ${PIPESTATUS[0]}) >&2 &
+    ("$@" |& sed 's/^/'$$': /'; return "${PIPESTATUS[0]}") >&2 &
     eval "$pid_variable+=\" $!\""
+}
+
+function save_stdout {
+    local out="$1"
+    shift
+    "$@" > "$out"
 }
 
 function test_run_in_background() {
@@ -1865,7 +1877,7 @@ function main() {
 
     export PATH=${CEPH_BUILD_VIRTUALENV}/ceph-disk-virtualenv/bin:${CEPH_BUILD_VIRTUALENV}/ceph-detect-init-virtualenv/bin:.:$PATH # make sure program from sources are preferred
     #export PATH=$CEPH_ROOT/src/ceph-disk/virtualenv/bin:$CEPH_ROOT/src/ceph-detect-init/virtualenv/bin:.:$PATH # make sure program from sources are preferred
-
+    export PYTHONWARNINGS=ignore
     export CEPH_CONF=/dev/null
     unset CEPH_ARGS
 

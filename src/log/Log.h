@@ -4,6 +4,8 @@
 #ifndef __CEPH_LOG_LOG_H
 #define __CEPH_LOG_LOG_H
 
+#include <memory>
+
 #include "common/Thread.h"
 
 #include "EntryQueue.h"
@@ -44,7 +46,9 @@ class Log : private Thread
   int m_stderr_log, m_stderr_crash;
   int m_graylog_log, m_graylog_crash;
 
-  shared_ptr<Graylog> m_graylog;
+  std::string m_log_stderr_prefix;
+
+  std::shared_ptr<Graylog> m_graylog;
 
   bool m_stop;
 
@@ -70,6 +74,7 @@ public:
   void set_log_file(std::string fn);
   void reopen_log_file();
   void chown_log_file(uid_t uid, gid_t gid);
+  void set_log_stderr_prefix(const std::string& p);
 
   void flush();
 
@@ -82,7 +87,7 @@ public:
   void start_graylog();
   void stop_graylog();
 
-  shared_ptr<Graylog> graylog() { return m_graylog; }
+  std::shared_ptr<Graylog> graylog() { return m_graylog; }
 
   Entry *create_entry(int level, int subsys, const char* msg = nullptr);
   Entry *create_entry(int level, int subsys, size_t* expected_size);

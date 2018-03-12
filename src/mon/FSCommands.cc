@@ -40,7 +40,7 @@ class FlagSetHandler : public FileSystemCommandHandler
       Monitor *mon,
       FSMap &fsmap,
       MonOpRequestRef op,
-      map<string, cmd_vartype> &cmdmap,
+      const cmdmap_t& cmdmap,
       std::stringstream &ss) override
   {
     string flag_name;
@@ -93,7 +93,7 @@ class FsNewHandler : public FileSystemCommandHandler
       Monitor *mon,
       FSMap &fsmap,
       MonOpRequestRef op,
-      map<string, cmd_vartype> &cmdmap,
+      const cmdmap_t& cmdmap,
       std::stringstream &ss) override
   {
     assert(m_paxos->is_plugged());
@@ -224,7 +224,7 @@ public:
       Monitor *mon,
       FSMap &fsmap,
       MonOpRequestRef op,
-      map<string, cmd_vartype> &cmdmap,
+      const cmdmap_t& cmdmap,
       std::stringstream &ss) override
   {
     std::string fs_name;
@@ -453,6 +453,36 @@ public:
       {
         fs->mds_map.set_standby_count_wanted(n);
       });
+    } else if (var == "session_timeout") {
+      if (interr.length()) {
+       ss << var << " requires an integer value";
+       return -EINVAL;
+      }
+      if (n < 30) {
+       ss << var << " must be at least 30s";
+       return -ERANGE;
+      }
+      fsmap.modify_filesystem(
+          fs->fscid,
+          [n](std::shared_ptr<Filesystem> fs)
+      {
+        fs->mds_map.set_session_timeout((uint32_t)n);
+      });
+    } else if (var == "session_autoclose") {
+      if (interr.length()) {
+       ss << var << " requires an integer value";
+       return -EINVAL;
+      }
+      if (n < 30) {
+       ss << var << " must be at least 30s";
+       return -ERANGE;
+      }
+      fsmap.modify_filesystem(
+          fs->fscid,
+          [n](std::shared_ptr<Filesystem> fs)
+      {
+        fs->mds_map.set_session_autoclose((uint32_t)n);
+      });
     } else {
       ss << "unknown variable " << var;
       return -EINVAL;
@@ -477,7 +507,7 @@ class AddDataPoolHandler : public FileSystemCommandHandler
       Monitor *mon,
       FSMap &fsmap,
       MonOpRequestRef op,
-      map<string, cmd_vartype> &cmdmap,
+      const cmdmap_t& cmdmap,
       std::stringstream &ss) override
   {
     assert(m_paxos->is_plugged());
@@ -556,7 +586,7 @@ class SetDefaultHandler : public FileSystemCommandHandler
       Monitor *mon,
       FSMap &fsmap,
       MonOpRequestRef op,
-      map<string, cmd_vartype> &cmdmap,
+      const cmdmap_t& cmdmap,
       std::stringstream &ss) override
   {
     std::string fs_name;
@@ -583,7 +613,7 @@ class RemoveFilesystemHandler : public FileSystemCommandHandler
       Monitor *mon,
       FSMap &fsmap,
       MonOpRequestRef op,
-      map<string, cmd_vartype> &cmdmap,
+      const cmdmap_t& cmdmap,
       std::stringstream &ss) override
   {
     // Check caller has correctly named the FS to delete
@@ -647,7 +677,7 @@ class ResetFilesystemHandler : public FileSystemCommandHandler
       Monitor *mon,
       FSMap &fsmap,
       MonOpRequestRef op,
-      map<string, cmd_vartype> &cmdmap,
+      const cmdmap_t& cmdmap,
       std::stringstream &ss) override
   {
     string fs_name;
@@ -692,7 +722,7 @@ class RemoveDataPoolHandler : public FileSystemCommandHandler
       Monitor *mon,
       FSMap &fsmap,
       MonOpRequestRef op,
-      map<string, cmd_vartype> &cmdmap,
+      const cmdmap_t& cmdmap,
       std::stringstream &ss) override
   {
     string poolname;
@@ -773,7 +803,7 @@ class AliasHandler : public T
       Monitor *mon,
       FSMap &fsmap,
       MonOpRequestRef op,
-      map<string, cmd_vartype> &cmdmap,
+      const cmdmap_t& cmdmap,
       std::stringstream &ss) override
   {
     return T::handle(mon, fsmap, op, cmdmap, ss);

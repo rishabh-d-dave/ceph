@@ -106,9 +106,11 @@
     log rm                     remove log object
     usage show                 show usage (by user, date range)
     usage trim                 trim usage (by user, date range)
+    usage clear                reset all the usage stats for the cluster
     gc list                    dump expired garbage collection objects (specify
                                --include-all to list all entries, including unexpired)
-    gc process                 manually process garbage
+    gc process                 manually process garbage (specify
+                               --include-all to process all entries, including unexpired)
     lc list                    list all bucket lifecycle progress
     lc process                 manually process lifecycle
     metadata get               get metadata info
@@ -149,6 +151,8 @@
     reshard status             read bucket resharding status
     reshard process            process of scheduled reshard jobs
     reshard cancel             cancel resharding a bucket
+    sync error list            list sync error
+    sync error trim            trim sync error
   options:
      --tenant=<tenant>         tenant name
      --uid=<id>                user id

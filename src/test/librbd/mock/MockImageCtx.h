@@ -71,6 +71,8 @@ struct MockImageCtx {
       size(image_ctx.size),
       features(image_ctx.features),
       flags(image_ctx.flags),
+      op_features(image_ctx.op_features),
+      operations_disabled(image_ctx.operations_disabled),
       stripe_unit(image_ctx.stripe_unit),
       stripe_count(image_ctx.stripe_count),
       object_prefix(image_ctx.object_prefix),
@@ -106,6 +108,7 @@ struct MockImageCtx {
           image_ctx.journal_max_concurrent_object_sets),
       mirroring_resync_after_disconnect(
           image_ctx.mirroring_resync_after_disconnect),
+      mirroring_delete_delay(image_ctx.mirroring_delete_delay),
       mirroring_replay_delay(image_ctx.mirroring_replay_delay),
       non_blocking_aio(image_ctx.non_blocking_aio),
       blkin_trace_all(image_ctx.blkin_trace_all),
@@ -195,6 +198,8 @@ struct MockImageCtx {
   MOCK_CONST_METHOD2(test_features, bool(uint64_t test_features,
                                          const RWLock &in_snap_lock));
 
+  MOCK_CONST_METHOD1(test_op_features, bool(uint64_t op_features));
+
   MOCK_METHOD1(cancel_async_requests, void(Context*));
 
   MOCK_METHOD0(create_exclusive_lock, MockExclusiveLock*());
@@ -261,6 +266,8 @@ struct MockImageCtx {
   uint64_t size;
   uint64_t features;
   uint64_t flags;
+  uint64_t op_features;
+  bool operations_disabled;
   uint64_t stripe_unit;
   uint64_t stripe_count;
   std::string object_prefix;
@@ -314,6 +321,7 @@ struct MockImageCtx {
   uint32_t journal_max_payload_bytes;
   int journal_max_concurrent_object_sets;
   bool mirroring_resync_after_disconnect;
+  uint64_t mirroring_delete_delay;
   int mirroring_replay_delay;
   bool non_blocking_aio;
   bool blkin_trace_all;

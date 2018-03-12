@@ -197,7 +197,7 @@ static int do_image_resize(ImportDiffContext *idiffctx)
   bufferlist bl;
   bl.append(buf, sizeof(buf));
   bufferlist::iterator p = bl.begin();
-  ::decode(end_size, p);
+  decode(end_size, p);
 
   uint64_t cur_size;
   idiffctx->image->size(&cur_size);
@@ -224,8 +224,8 @@ static int do_image_io(ImportDiffContext *idiffctx, bool discard, size_t sparse_
   bufferlist::iterator p = bl.begin();
 
   uint64_t image_offset, buffer_length;
-  ::decode(image_offset, p);
-  ::decode(buffer_length, p);
+  decode(image_offset, p);
+  decode(buffer_length, p);
 
   if (!discard) {
     bufferptr bp = buffer::create(buffer_length);
@@ -333,7 +333,7 @@ static int read_tag(int fd, __u8 end_tag, int format, __u8 *tag, uint64_t *readl
     bufferlist bl;
     bl.append(buf, sizeof(buf));
     bufferlist::iterator p = bl.begin();
-    ::decode(*readlen, p);
+    decode(*readlen, p);
   }
 
   return 0;
@@ -441,14 +441,15 @@ void get_arguments_diff(po::options_description *positional,
   at::add_no_progress_option(options);
 }
 
-int execute_diff(const po::variables_map &vm) {
+int execute_diff(const po::variables_map &vm,
+                 const std::vector<std::string> &ceph_global_init_args) {
   std::string path;
-  int r = utils::get_path(vm, utils::get_positional_argument(vm, 0), &path);
+  size_t arg_index = 0;
+  int r = utils::get_path(vm, &arg_index, &path);
   if (r < 0) {
     return r;
   }
 
-  size_t arg_index = 1;
   std::string pool_name;
   std::string image_name;
   std::string snap_name;
@@ -546,7 +547,7 @@ static int decode_and_set_image_option(int fd, uint64_t imageopt, librbd::ImageO
   it = bl.begin();
 
   uint64_t val;
-  ::decode(val, it);
+  decode(val, it);
 
   if (opts.get(imageopt, &val) != 0) {
     opts.set(imageopt, val);
@@ -664,8 +665,7 @@ static int do_import_v2(librados::Rados &rados, int fd, librbd::Image &image,
   bl.append(buf, sizeof(buf));
   bufferlist::iterator p = bl.begin();
   uint64_t diff_num;
-  ::decode(diff_num, p);
-
+  decode(diff_num, p);
   for (size_t i = 0; i < diff_num; i++) {
     r = do_import_diff_fd(rados, image, fd, true, 2, sparse_size);
     if (r < 0) {
@@ -904,9 +904,11 @@ void get_arguments(po::options_description *positional,
   at::add_image_option(options, at::ARGUMENT_MODIFIER_NONE, " (deprecated)");
 }
 
-int execute(const po::variables_map &vm) {
+int execute(const po::variables_map &vm,
+            const std::vector<std::string> &ceph_global_init_args) {
   std::string path;
-  int r = utils::get_path(vm, utils::get_positional_argument(vm, 0), &path);
+  size_t arg_index = 0;
+  int r = utils::get_path(vm, &arg_index, &path);
   if (r < 0) {
     return r;
   }
@@ -941,7 +943,6 @@ int execute(const po::variables_map &vm) {
     sparse_size = vm[at::IMAGE_SPARSE_SIZE].as<size_t>();
   }
 
-  size_t arg_index = 1;
   std::string pool_name = deprecated_pool_name;
   std::string image_name;
   std::string snap_name = deprecated_snap_name;

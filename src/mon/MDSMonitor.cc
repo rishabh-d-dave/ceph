@@ -12,9 +12,9 @@
  * 
  */
 
+#include <regex>
 #include <sstream>
 #include <boost/utility.hpp>
-#include <boost/regex.hpp>
 
 #include "MDSMonitor.h"
 #include "FSCommands.h"
@@ -232,21 +232,21 @@ void MDSMonitor::encode_pending(MonitorDBStore::TransactionRef t)
   }
   pending_fsmap.get_health_checks(&new_checks);
   for (auto& p : new_checks.checks) {
-    p.second.summary = boost::regex_replace(
+    p.second.summary = std::regex_replace(
       p.second.summary,
-      boost::regex("%num%"),
+      std::regex("%num%"),
       stringify(p.second.detail.size()));
-    p.second.summary = boost::regex_replace(
+    p.second.summary = std::regex_replace(
       p.second.summary,
-      boost::regex("%plurals%"),
+      std::regex("%plurals%"),
       p.second.detail.size() > 1 ? "s" : "");
-    p.second.summary = boost::regex_replace(
+    p.second.summary = std::regex_replace(
       p.second.summary,
-      boost::regex("%isorare%"),
+      std::regex("%isorare%"),
       p.second.detail.size() > 1 ? "are" : "is");
-    p.second.summary = boost::regex_replace(
+    p.second.summary = std::regex_replace(
       p.second.summary,
-      boost::regex("%hasorhave%"),
+      std::regex("%hasorhave%"),
       p.second.detail.size() > 1 ? "have" : "has");
   }
   encode_health(new_checks, t);
@@ -839,7 +839,7 @@ bool MDSMonitor::preprocess_command(MonOpRequestRef op)
   bufferlist rdata;
   stringstream ss, ds;
 
-  map<string, cmd_vartype> cmdmap;
+  cmdmap_t cmdmap;
   if (!cmdmap_from_json(m->cmd, &cmdmap, ss)) {
     // ss has reason for failure
     string rs = ss.str();
@@ -1167,7 +1167,7 @@ bool MDSMonitor::prepare_command(MonOpRequestRef op)
   stringstream ss;
   bufferlist rdata;
 
-  map<string, cmd_vartype> cmdmap;
+  cmdmap_t cmdmap;
   if (!cmdmap_from_json(m->cmd, &cmdmap, ss)) {
     string rs = ss.str();
     mon->reply_command(op, -EINVAL, rs, rdata, get_last_committed());
@@ -1283,14 +1283,14 @@ int MDSMonitor::parse_role(
 int MDSMonitor::filesystem_command(
     MonOpRequestRef op,
     std::string const &prefix,
-    map<string, cmd_vartype> &cmdmap,
+    const cmdmap_t& cmdmap,
     std::stringstream &ss)
 {
   dout(4) << __func__ << " prefix='" << prefix << "'" << dendl;
   op->mark_mdsmon_event(__func__);
   int r = 0;
   string whostr;
-  cmd_getval(g_ceph_context, cmdmap, "who", whostr);
+  cmd_getval(g_ceph_context, cmdmap, "role", whostr);
 
   if (prefix == "mds deactivate") {
     mds_role_t role;
@@ -1331,13 +1331,13 @@ int MDSMonitor::filesystem_command(
     mds_gid_t gid;
     if (!cmd_getval(g_ceph_context, cmdmap, "gid", gid)) {
       ss << "error parsing 'gid' value '"
-         << cmd_vartype_stringify(cmdmap["gid"]) << "'";
+         << cmd_vartype_stringify(cmdmap.at("gid")) << "'";
       return -EINVAL;
     }
     MDSMap::DaemonState state;
     if (!cmd_getval(g_ceph_context, cmdmap, "state", state)) {
       ss << "error parsing 'state' string value '"
-         << cmd_vartype_stringify(cmdmap["state"]) << "'";
+         << cmd_vartype_stringify(cmdmap.at("state")) << "'";
       return -EINVAL;
     }
     if (pending_fsmap.gid_exists(gid)) {
@@ -1350,7 +1350,7 @@ int MDSMonitor::filesystem_command(
     }
   } else if (prefix == "mds fail") {
     string who;
-    cmd_getval(g_ceph_context, cmdmap, "who", who);
+    cmd_getval(g_ceph_context, cmdmap, "role_or_gid", who);
 
     MDSMap::mds_info_t failed_info;
     r = fail_mds(ss, who, &failed_info);
@@ -1368,7 +1368,7 @@ int MDSMonitor::filesystem_command(
     mds_gid_t gid;
     if (!cmd_getval(g_ceph_context, cmdmap, "gid", gid)) {
       ss << "error parsing 'gid' value '"
-         << cmd_vartype_stringify(cmdmap["gid"]) << "'";
+         << cmd_vartype_stringify(cmdmap.at("gid")) << "'";
       return -EINVAL;
     }
     if (!pending_fsmap.gid_exists(gid)) {
@@ -1396,7 +1396,7 @@ int MDSMonitor::filesystem_command(
     }
     
     std::string role_str;
-    cmd_getval(g_ceph_context, cmdmap, "who", role_str);
+    cmd_getval(g_ceph_context, cmdmap, "role", role_str);
     mds_role_t role;
     int r = parse_role(role_str, &role, ss);
     if (r < 0) {
@@ -1417,7 +1417,7 @@ int MDSMonitor::filesystem_command(
     int64_t f;
     if (!cmd_getval(g_ceph_context, cmdmap, "feature", f)) {
       ss << "error parsing feature value '"
-         << cmd_vartype_stringify(cmdmap["feature"]) << "'";
+         << cmd_vartype_stringify(cmdmap.at("feature")) << "'";
       return -EINVAL;
     }
     if (pending_fsmap.compat.compat.contains(f)) {
@@ -1433,7 +1433,7 @@ int MDSMonitor::filesystem_command(
     int64_t f;
     if (!cmd_getval(g_ceph_context, cmdmap, "feature", f)) {
       ss << "error parsing feature value '"
-         << cmd_vartype_stringify(cmdmap["feature"]) << "'";
+         << cmd_vartype_stringify(cmdmap.at("feature")) << "'";
       return -EINVAL;
     }
     if (pending_fsmap.compat.incompat.contains(f)) {
@@ -1447,7 +1447,7 @@ int MDSMonitor::filesystem_command(
     r = 0;
   } else if (prefix == "mds repaired") {
     std::string role_str;
-    cmd_getval(g_ceph_context, cmdmap, "rank", role_str);
+    cmd_getval(g_ceph_context, cmdmap, "role", role_str);
     mds_role_t role;
     r = parse_role(role_str, &role, ss);
     if (r < 0) {
@@ -1637,7 +1637,7 @@ void MDSMonitor::update_metadata(mds_gid_t gid,
 
   MonitorDBStore::TransactionRef t = paxos->get_pending_transaction();
   bufferlist bl;
-  ::encode(pending_metadata, bl);
+  encode(pending_metadata, bl);
   t->put(MDS_METADATA_PREFIX, "last_metadata", bl);
   paxos->trigger_propose();
 }
@@ -1657,7 +1657,7 @@ void MDSMonitor::remove_from_metadata(MonitorDBStore::TransactionRef t)
   if (!update)
     return;
   bufferlist bl;
-  ::encode(pending_metadata, bl);
+  encode(pending_metadata, bl);
   t->put(MDS_METADATA_PREFIX, "last_metadata", bl);
 }
 
@@ -1671,7 +1671,7 @@ int MDSMonitor::load_metadata(map<mds_gid_t, Metadata>& m)
   }
 
   bufferlist::iterator it = bl.begin();
-  ::decode(m, it);
+  decode(m, it);
   return 0;
 }
 

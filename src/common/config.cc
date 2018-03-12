@@ -41,7 +41,7 @@ using std::ostringstream;
 using std::pair;
 using std::string;
 
-const char *CEPH_CONF_FILE_DEFAULT = "$data_dir/config, /etc/ceph/$cluster.conf, ~/.ceph/$cluster.conf, $cluster.conf"
+static const char *CEPH_CONF_FILE_DEFAULT = "$data_dir/config, /etc/ceph/$cluster.conf, ~/.ceph/$cluster.conf, $cluster.conf"
 #if defined(__FreeBSD__)
     ", /usr/local/etc/ceph/$cluster.conf"
 #endif
@@ -89,7 +89,9 @@ md_config_t::md_config_t(bool is_daemon)
                 << std::endl;
       ceph_abort();
     }
-    schema.insert({i.name, i});
+    schema.emplace(std::piecewise_construct,
+		   std::forward_as_tuple(i.name),
+		   std::forward_as_tuple(i));
   }
 
   // Populate list of legacy_values according to the OPTION() definitions
@@ -389,6 +391,17 @@ void md_config_t::show_config(Formatter *f)
 {
   Mutex::Locker l(lock);
   _show_config(NULL, f);
+}
+
+void md_config_t::config_options(Formatter *f)
+{
+  Mutex::Locker l(lock);
+  f->open_array_section("options");
+  for (const auto& i: schema) {
+    const Option &opt = i.second;
+    opt.dump(f);
+  }
+  f->close_section();
 }
 
 void md_config_t::_show_config(std::ostream *out, Formatter *f)
@@ -903,8 +916,7 @@ Option::value_t md_config_t::_get_val_generic(const std::string &key) const
 int md_config_t::_get_val(const std::string &key, std::string *value) const {
   assert(lock.is_locked());
 
-  std::string normalized_key(ConfFile::normalize_key_name(key));
-  Option::value_t config_value = _get_val_generic(normalized_key.c_str());
+  auto config_value = _get_val_generic(key);
   if (!boost::get<boost::blank>(&config_value)) {
     ostringstream oss;
     if (bool *flag = boost::get<bool>(&config_value)) {

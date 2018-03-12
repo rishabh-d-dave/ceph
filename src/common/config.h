@@ -15,6 +15,7 @@
 #ifndef CEPH_CONFIG_H
 #define CEPH_CONFIG_H
 
+#include <map>
 #include "common/ConfUtils.h"
 #include "common/entity_name.h"
 #include "common/code_environment.h"
@@ -23,17 +24,7 @@
 #include "common/config_obs.h"
 #include "common/options.h"
 
-#define OSD_REP_PRIMARY 0
-#define OSD_REP_SPLAY   1
-#define OSD_REP_CHAIN   2
-
 class CephContext;
-
-extern const char *CEPH_CONF_FILE_DEFAULT;
-
-#define LOG_TO_STDERR_NONE 0
-#define LOG_TO_STDERR_SOME 1
-#define LOG_TO_STDERR_ALL 2
 
 /** This class represents the current Ceph configuration.
  *
@@ -90,7 +81,7 @@ public:
    * The configuration schema, in the form of Option objects describing
    * possible settings.
    */
-  std::map<std::string, const Option &> schema;
+  std::map<std::string, const Option&> schema;
 
   /**
    * The current values of all settings described by the schema
@@ -165,6 +156,13 @@ public:
   int _get_val(const std::string &key, char **buf, int len) const;
   Option::value_t get_val_generic(const std::string &key) const;
   template<typename T> const T get_val(const std::string &key) const;
+  template<typename T, typename Callback, typename...Args>
+  auto with_val(const string& key, Callback&& cb, Args&&... args) const ->
+    std::result_of_t<Callback(const T&, Args...)> {
+    return std::forward<Callback>(cb)(
+      boost::get<T>(this->get_val_generic(key)),
+      std::forward<Args>(args)...);
+  }
 
   void get_all_keys(std::vector<std::string> *keys) const;
 
@@ -183,6 +181,9 @@ public:
   void show_config(std::ostream& out);
   /// dump all config values to a formatter
   void show_config(Formatter *f);
+  
+  /// dump all config settings to a formatter
+  void config_options(Formatter *f);
 
   /// obtain a diff between our config values and another md_config_t values
   void diff(const md_config_t *other,

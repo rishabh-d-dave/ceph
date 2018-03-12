@@ -38,7 +38,13 @@ namespace ceph {
 	    cct->_conf->osd_op_queue_mclock_recov_lim),
       scrub(cct->_conf->osd_op_queue_mclock_scrub_res,
 	    cct->_conf->osd_op_queue_mclock_scrub_wgt,
-	    cct->_conf->osd_op_queue_mclock_scrub_lim)
+	    cct->_conf->osd_op_queue_mclock_scrub_lim),
+      pg_delete(cct->_conf->osd_op_queue_mclock_pg_delete_res,
+	    cct->_conf->osd_op_queue_mclock_pg_delete_wgt,
+	    cct->_conf->osd_op_queue_mclock_pg_delete_lim),
+      peering_event(cct->_conf->osd_op_queue_mclock_peering_event_res,
+		    cct->_conf->osd_op_queue_mclock_peering_event_wgt,
+		    cct->_conf->osd_op_queue_mclock_peering_event_lim)
     {
       constexpr int rep_ops[] = {
 	MSG_OSD_REPOP,

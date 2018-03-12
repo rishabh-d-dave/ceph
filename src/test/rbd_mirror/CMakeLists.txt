@@ -1,8 +1,9 @@
 set(rbd_mirror_test_srcs
   test_ClusterWatcher.cc
   test_PoolWatcher.cc
-  test_ImageReplayer.cc
   test_ImageDeleter.cc
+  test_ImagePolicy.cc
+  test_ImageReplayer.cc
   test_ImageSync.cc
   test_InstanceWatcher.cc
   test_Instances.cc
@@ -26,6 +27,8 @@ add_executable(unittest_rbd_mirror
   test_mock_PoolWatcher.cc
   image_deleter/test_mock_RemoveRequest.cc
   image_deleter/test_mock_SnapshotPurgeRequest.cc
+  image_deleter/test_mock_TrashMoveRequest.cc
+  image_deleter/test_mock_TrashWatcher.cc
   image_replayer/test_mock_BootstrapRequest.cc
   image_replayer/test_mock_CreateImageRequest.cc
   image_replayer/test_mock_EventPreprocessor.cc

@@ -292,15 +292,16 @@ void MgrClient::send_report()
 	  type.nick = data.nick;
 	}
 	type.type = data.type;
-        type.priority = perf_counters.get_adjusted_priority(data.prio);
+       type.priority = perf_counters.get_adjusted_priority(data.prio);
+	type.unit = data.unit;
 	report->declare_types.push_back(std::move(type));
 	session->declared.insert(path);
       }
 
-      ::encode(static_cast<uint64_t>(data.u64), report->packed);
+      encode(static_cast<uint64_t>(data.u64), report->packed);
       if (data.type & PERFCOUNTER_LONGRUNAVG) {
-        ::encode(static_cast<uint64_t>(data.avgcount), report->packed);
-        ::encode(static_cast<uint64_t>(data.avgcount2), report->packed);
+        encode(static_cast<uint64_t>(data.avgcount), report->packed);
+        encode(static_cast<uint64_t>(data.avgcount2), report->packed);
       }
     }
     ENCODE_FINISH(report->packed);

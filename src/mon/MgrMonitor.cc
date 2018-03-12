@@ -113,7 +113,7 @@ void MgrMonitor::update_from_paxos(bool *need_bootstrap)
         derr << "Failed to load mgr commands: " << cpp_strerror(r) << dendl;
       } else {
         auto p = loaded_commands.begin();
-        ::decode(command_descs, p);
+        decode(command_descs, p);
       }
     }
   }
@@ -189,7 +189,7 @@ void MgrMonitor::encode_pending(MonitorDBStore::TransactionRef t)
       p.set_flag(MonCommand::FLAG_MGR);
     }
     bufferlist bl;
-    ::encode(pending_command_descs, bl);
+    encode(pending_command_descs, bl);
     t->put(command_descs_prefix, "", bl);
     pending_command_descs.clear();
   }
@@ -267,6 +267,7 @@ public:
 bool MgrMonitor::preprocess_beacon(MonOpRequestRef op)
 {
   MMgrBeacon *m = static_cast<MMgrBeacon*>(op->get_req());
+  mon->no_reply(op); // we never reply to beacons
   dout(4) << "beacon from " << m->get_gid() << dendl;
 
   if (!check_caps(op, m->get_fsid())) {
@@ -295,7 +296,7 @@ bool MgrMonitor::prepare_beacon(MonOpRequestRef op)
 
   // See if we are seeing same name, new GID for any standbys
   for (const auto &i : pending_map.standbys) {
-    const StandbyInfo &s = i.second;
+    const MgrMap::StandbyInfo &s = i.second;
     if (s.name == m->get_name() && s.gid != m->get_gid()) {
       dout(4) << "Standby daemon restart (mgr." << m->get_name() << ")" << dendl;
       mon->clog->debug() << "Standby manager daemon " << m->get_name()
@@ -366,7 +367,7 @@ bool MgrMonitor::prepare_beacon(MonOpRequestRef op)
     pending_map.active_gid = m->get_gid();
     pending_map.active_name = m->get_name();
     pending_map.available_modules = m->get_available_modules();
-    ::encode(m->get_metadata(), pending_metadata[m->get_name()]);
+    encode(m->get_metadata(), pending_metadata[m->get_name()]);
     pending_metadata_rm.erase(m->get_name());
 
     mon->clog->info() << "Activating manager daemon "
@@ -392,7 +393,7 @@ bool MgrMonitor::prepare_beacon(MonOpRequestRef op)
                          << " started";
       pending_map.standbys[m->get_gid()] = {m->get_gid(), m->get_name(),
 					    m->get_available_modules()};
-      ::encode(m->get_metadata(), pending_metadata[m->get_name()]);
+      encode(m->get_metadata(), pending_metadata[m->get_name()]);
       pending_metadata_rm.erase(m->get_name());
       updated = true;
     }
@@ -451,14 +452,15 @@ void MgrMonitor::send_digests()
 {
   cancel_timer();
 
-  if (!is_active()) {
-    return;
-  }
-  dout(10) << __func__ << dendl;
-
   const std::string type = "mgrdigest";
   if (mon->session_map.subs.count(type) == 0)
     return;
+
+  if (!is_active()) {
+    // if paxos is currently not active, don't send a digest but reenable timer
+    goto timer;
+  }
+  dout(10) << __func__ << dendl;
 
   for (auto sub : *(mon->session_map.subs[type])) {
     dout(10) << __func__ << " sending digest to subscriber " << sub->session->con
@@ -478,6 +480,7 @@ void MgrMonitor::send_digests()
     sub->session->con->send_message(mdigest);
   }
 
+timer:
   digest_event = mon->timer.add_event_after(
     g_conf->get_val<int64_t>("mon_mgr_digest_period"),
     new C_MonContext(mon, [this](int) {
@@ -664,7 +667,7 @@ bool MgrMonitor::preprocess_command(MonOpRequestRef op)
   std::stringstream ss;
   bufferlist rdata;
 
-  std::map<std::string, cmd_vartype> cmdmap;
+  cmdmap_t cmdmap;
   if (!cmdmap_from_json(m->cmd, &cmdmap, ss)) {
     string rs = ss.str();
     mon->reply_command(op, -EINVAL, rs, rdata, get_last_committed());
@@ -710,13 +713,17 @@ bool MgrMonitor::preprocess_command(MonOpRequestRef op)
     {
       f->open_array_section("enabled_modules");
       for (auto& p : map.modules) {
+        // We only show the name for enabled modules.  The any errors
+        // etc will show up as a health checks.
         f->dump_string("module", p);
       }
       f->close_section();
       f->open_array_section("disabled_modules");
       for (auto& p : map.available_modules) {
-        if (map.modules.count(p) == 0) {
-          f->dump_string("module", p);
+        if (map.modules.count(p.name) == 0) {
+          // For disabled modules, we show the full info, to
+          // give a hint about whether enabling it will work
+          p.dump(f.get());
         }
       }
       f->close_section();
@@ -800,7 +807,7 @@ bool MgrMonitor::prepare_command(MonOpRequestRef op)
   std::stringstream ss;
   bufferlist rdata;
 
-  std::map<std::string, cmd_vartype> cmdmap;
+  cmdmap_t cmdmap;
   if (!cmdmap_from_json(m->cmd, &cmdmap, ss)) {
     string rs = ss.str();
     mon->reply_command(op, -EINVAL, rs, rdata, get_last_committed());
@@ -933,7 +940,7 @@ int MgrMonitor::load_metadata(const string& name, std::map<string, string>& m,
     return r;
   try {
     bufferlist::iterator p = bl.begin();
-    ::decode(m, p);
+    decode(m, p);
   }
   catch (buffer::error& e) {
     if (err)

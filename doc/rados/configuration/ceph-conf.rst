@@ -44,10 +44,12 @@ The default Ceph configuration file locations in sequential order include:
 #. ``$CEPH_CONF`` (*i.e.,* the path following the ``$CEPH_CONF`` 
    environment variable)
 #. ``-c path/path``  (*i.e.,* the ``-c`` command line argument)
-#. ``/etc/ceph/ceph.conf``
-#. ``~/.ceph/config``
-#. ``./ceph.conf`` (*i.e.,* in the current working directory)
+#. ``/etc/ceph/$cluster.conf``
+#. ``~/.ceph/$cluster.conf``
+#. ``./$cluster.conf`` (*i.e.,* in the current working directory)
+#. On FreeBSD systems only, ``/usr/local/etc/ceph/$cluster.conf``
 
+where ``$cluster`` is the cluster's name (default ``ceph``).
 
 The Ceph configuration file uses an *ini* style syntax. You can add comments 
 by preceding comments with a pound sign (#) or a semi-colon (;).  For example:
@@ -561,7 +563,7 @@ Running Multiple Clusters
 
 With Ceph, you can run multiple Ceph Storage Clusters on the same hardware.
 Running multiple clusters provides a higher level of isolation compared to 
-using different pools on the same cluster with different CRUSH rulesets. A 
+using different pools on the same cluster with different CRUSH rules. A 
 separate cluster will have separate monitor, OSD and metadata server processes. 
 When running Ceph with  default settings, the default cluster name is ``ceph``, 
 which means you would  save your Ceph configuration file with the file name

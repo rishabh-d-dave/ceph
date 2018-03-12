@@ -18,6 +18,7 @@
 #include "include/assert.h"
 #include <iterator>
 #include <cstdlib>
+#include <ostream>
 
 template<typename T>
 class xlist {
@@ -33,9 +34,8 @@ public:
       //remove_myself();
     }
 
-    // no copying!
-    item(const item& other);
-    const item& operator= (const item& right);
+    item(const item& other) = delete;
+    const item& operator= (const item& right) = delete;
 
     
     xlist* get_list() { return _list; }

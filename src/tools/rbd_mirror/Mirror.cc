@@ -178,8 +178,8 @@ public:
     }
   }
 
-  bool call(std::string command, cmdmap_t& cmdmap, std::string format,
-	    bufferlist& out) override {
+  bool call(std::string_view command, const cmdmap_t& cmdmap,
+	    std::string_view format, bufferlist& out) override {
     Commands::const_iterator i = commands.find(command);
     assert(i != commands.end());
     Formatter *f = Formatter::create(format);
@@ -191,7 +191,7 @@ public:
   }
 
 private:
-  typedef std::map<std::string, MirrorAdminSocketCommand*> Commands;
+  typedef std::map<std::string, MirrorAdminSocketCommand*, std::less<>> Commands;
 
   AdminSocket *admin_socket;
   Commands commands;
@@ -245,11 +245,6 @@ int Mirror::init()
 
   m_local_cluster_watcher.reset(new ClusterWatcher(m_local, m_lock,
                                                    m_service_daemon.get()));
-
-  m_image_deleter.reset(new ImageDeleter<>(m_threads->work_queue,
-                                           m_threads->timer,
-                                           &m_threads->timer_lock,
-                                           m_service_daemon.get()));
   return r;
 }
 
@@ -296,10 +291,7 @@ void Mirror::print_status(Formatter *f, stringstream *ss)
 
   if (f) {
     f->close_section();
-    f->open_object_section("image_deleter");
   }
-
-  m_image_deleter->print_status(f, ss);
 }
 
 void Mirror::start()
@@ -419,8 +411,7 @@ void Mirror::update_pool_replayers(const PoolPeers &pool_peers)
       } else {
         dout(20) << "starting pool replayer for " << peer << dendl;
         unique_ptr<PoolReplayer> pool_replayer(new PoolReplayer(
-	  m_threads, m_service_daemon.get(), m_image_deleter.get(), kv.first,
-          peer, m_args));
+	  m_threads, m_service_daemon.get(), kv.first, peer, m_args));
 
         // TODO: make async
         pool_replayer->init();

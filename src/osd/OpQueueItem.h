@@ -23,7 +23,7 @@
 #include "osd/PG.h"
 #include "common/mClockCommon.h"
 #include "messages/MOSDOp.h"
-
+#include "PGPeeringEvent.h"
 
 class OSD;
 
@@ -41,9 +41,11 @@ public:
   public:
     enum class op_type_t {
       client_op,
+      peering_event,
       bg_snaptrim,
       bg_recovery,
-      bg_scrub
+      bg_scrub,
+      bg_pg_delete
     };
     using Ref = std::unique_ptr<OpQueueable>;
 
@@ -70,6 +72,7 @@ public:
     friend ostream& operator<<(ostream& out, const OpQueueable& q) {
       return q.print(out);
     }
+
   };
 
 private:
@@ -198,6 +201,19 @@ public:
   void run(OSD *osd, PGRef& pg, ThreadPool::TPHandle &handle) override final;
 };
 
+class PGPeeringItem : public PGOpQueueable {
+  PGPeeringEventRef evt;
+public:
+  PGPeeringItem(spg_t pg, PGPeeringEventRef e) : PGOpQueueable(pg), evt(e) {}
+  op_type_t get_op_type() const override final {
+    return op_type_t::peering_event;
+  }
+  ostream &print(ostream &rhs) const override final {
+    return rhs << "PGPeeringEvent(" << evt->get_desc() << ")";
+  }
+  void run(OSD *osd, PGRef& pg, ThreadPool::TPHandle &handle) override final;
+};
+
 class PGSnapTrim : public PGOpQueueable {
   epoch_t epoch_queued;
 public:
@@ -260,5 +276,25 @@ public:
     return reserved_pushes;
   }
   virtual void run(
+    OSD *osd, PGRef& pg, ThreadPool::TPHandle &handle) override final;
+};
+
+class PGDelete : public PGOpQueueable {
+  epoch_t epoch_queued;
+public:
+  PGDelete(
+    spg_t pg,
+    epoch_t epoch_queued)
+    : PGOpQueueable(pg),
+      epoch_queued(epoch_queued) {}
+  op_type_t get_op_type() const override final {
+    return op_type_t::bg_pg_delete;
+  }
+  ostream &print(ostream &rhs) const override final {
+    return rhs << "PGDelete(" << get_pgid()
+	       << " e" << epoch_queued
+	       << ")";
+  }
+  void run(
     OSD *osd, PGRef& pg, ThreadPool::TPHandle &handle) override final;
 };

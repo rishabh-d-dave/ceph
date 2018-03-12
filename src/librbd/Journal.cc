@@ -20,6 +20,7 @@
 #include "librbd/journal/DemoteRequest.h"
 #include "librbd/journal/OpenRequest.h"
 #include "librbd/journal/RemoveRequest.h"
+#include "librbd/journal/ResetRequest.h"
 #include "librbd/journal/Replay.h"
 #include "librbd/journal/PromoteRequest.h"
 
@@ -182,7 +183,7 @@ struct GetTagsRequest {
     librbd::journal::ClientData client_data;
     bufferlist::iterator bl_it = client->data.begin();
     try {
-      ::decode(client_data, bl_it);
+      decode(client_data, bl_it);
     } catch (const buffer::error &err) {
       lderr(cct) << this << " OpenJournalerRequest::" << __func__ << ": "
                  << "failed to decode client data" << dendl;
@@ -252,7 +253,7 @@ int allocate_journaler_tag(CephContext *cct, J *journaler,
   tag_data.predecessor = predecessor;
 
   bufferlist tag_bl;
-  ::encode(tag_data, tag_bl);
+  encode(tag_data, tag_bl);
 
   C_SaferCond allocate_tag_ctx;
   journaler->allocate_tag(tag_class, tag_bl, new_tag, &allocate_tag_ctx);
@@ -405,54 +406,17 @@ int Journal<I>::reset(librados::IoCtx &io_ctx, const std::string &image_id) {
   CephContext *cct = reinterpret_cast<CephContext *>(io_ctx.cct());
   ldout(cct, 5) << __func__ << ": image=" << image_id << dendl;
 
-  Journaler journaler(io_ctx, image_id, IMAGE_CLIENT_ID, {});
+  ThreadPool *thread_pool;
+  ContextWQ *op_work_queue;
+  ImageCtx::get_thread_pool_instance(cct, &thread_pool, &op_work_queue);
 
   C_SaferCond cond;
-  journaler.init(&cond);
-  BOOST_SCOPE_EXIT_ALL(&journaler) {
-    journaler.shut_down();
-  };
+  auto req = journal::ResetRequest<I>::create(io_ctx, image_id, IMAGE_CLIENT_ID,
+                                              Journal<>::LOCAL_MIRROR_UUID,
+                                              op_work_queue, &cond);
+  req->send();
 
-  int r = cond.wait();
-  if (r == -ENOENT) {
-    return 0;
-  } else if (r < 0) {
-    lderr(cct) << __func__ << ": "
-               << "failed to initialize journal: " << cpp_strerror(r) << dendl;
-    return r;
-  }
-
-  uint8_t order, splay_width;
-  int64_t pool_id;
-  journaler.get_metadata(&order, &splay_width, &pool_id);
-
-  std::string pool_name;
-  if (pool_id != -1) {
-    librados::Rados rados(io_ctx);
-    r = rados.pool_reverse_lookup(pool_id, &pool_name);
-    if (r < 0) {
-      lderr(cct) << __func__ << ": "
-                 << "failed to lookup data pool: " << cpp_strerror(r) << dendl;
-      return r;
-    }
-  }
-
-  C_SaferCond ctx1;
-  journaler.remove(true, &ctx1);
-  r = ctx1.wait();
-  if (r < 0) {
-    lderr(cct) << __func__ << ": "
-               << "failed to reset journal: " << cpp_strerror(r) << dendl;
-    return r;
-  }
-
-  r = create(io_ctx, image_id, order, splay_width, pool_name);
-  if (r < 0) {
-    lderr(cct) << __func__ << ": "
-               << "failed to create journal: " << cpp_strerror(r) << dendl;
-    return r;
-  }
-  return 0;
+  return cond.wait();
 }
 
 template <typename I>
@@ -519,7 +483,7 @@ int Journal<I>::request_resync(I *image_ctx) {
 
   journal::ClientData client_data(client_meta);
   bufferlist client_data_bl;
-  ::encode(client_data, client_data_bl);
+  encode(client_data, client_data_bl);
 
   C_SaferCond update_client_ctx;
   journaler.update_client(client_data_bl, &update_client_ctx);
@@ -717,7 +681,7 @@ void Journal<I>::allocate_tag(const std::string &mirror_uuid,
   tag_data.predecessor = predecessor;
 
   bufferlist tag_bl;
-  ::encode(tag_data, tag_bl);
+  encode(tag_data, tag_bl);
 
   C_DecodeTag *decode_tag_ctx = new C_DecodeTag(cct, &m_lock, &m_tag_tid,
                                                 &m_tag_data, on_finish);
@@ -759,7 +723,7 @@ uint64_t Journal<I>::append_write_event(uint64_t offset, size_t length,
                                     ceph_clock_now());
 
     bufferlists.emplace_back();
-    ::encode(event_entry, bufferlists.back());
+    encode(event_entry, bufferlists.back());
 
     event_offset += event_length;
     bytes_remaining -= event_length;
@@ -776,7 +740,7 @@ uint64_t Journal<I>::append_io_event(journal::EventEntry &&event_entry,
                                      bool flush_entry, int filter_ret_val) {
   bufferlist bl;
   event_entry.timestamp = ceph_clock_now();
-  ::encode(event_entry, bl);
+  encode(event_entry, bl);
   return append_io_events(event_entry.get_event_type(), {bl}, requests, offset,
                           length, flush_entry, filter_ret_val);
 }
@@ -887,7 +851,7 @@ void Journal<I>::append_op_event(uint64_t op_tid,
 
   bufferlist bl;
   event_entry.timestamp = ceph_clock_now();
-  ::encode(event_entry, bl);
+  encode(event_entry, bl);
 
   Future future;
   {
@@ -924,7 +888,7 @@ void Journal<I>::commit_op_event(uint64_t op_tid, int r, Context *on_safe) {
                                   ceph_clock_now());
 
   bufferlist bl;
-  ::encode(event_entry, bl);
+  encode(event_entry, bl);
 
   Future op_start_future;
   Future op_finish_future;
@@ -1302,6 +1266,10 @@ void Journal<I>::handle_replay_complete(int r) {
         handle_flushing_replay();
       }
     });
+  ctx = new FunctionContext([this, ctx](int r) {
+      // ensure the commit position is flushed to disk
+      m_journaler->flush_commit_position(ctx);
+    });
   ctx = new FunctionContext([this, cct, cancel_ops, ctx](int r) {
       ldout(cct, 20) << this << " handle_replay_complete: "
                      << "shut down replay" << dendl;
@@ -1348,7 +1316,13 @@ void Journal<I>::handle_replay_process_safe(ReplayEntry replay_entry, int r) {
       m_lock.Unlock();
 
       // stop replay, shut down, and restart
-      Context *ctx = new FunctionContext([this, cct](int r) {
+      Context* ctx = create_context_callback<
+        Journal<I>, &Journal<I>::handle_flushing_restart>(this);
+      ctx = new FunctionContext([this, ctx](int r) {
+          // ensure the commit position is flushed to disk
+          m_journaler->flush_commit_position(ctx);
+        });
+      ctx = new FunctionContext([this, cct, ctx](int r) {
           ldout(cct, 20) << this << " handle_replay_process_safe: "
                          << "shut down replay" << dendl;
           {
@@ -1356,8 +1330,7 @@ void Journal<I>::handle_replay_process_safe(ReplayEntry replay_entry, int r) {
             assert(m_state == STATE_FLUSHING_RESTART);
           }
 
-          m_journal_replay->shut_down(true, create_context_callback<
-            Journal<I>, &Journal<I>::handle_flushing_restart>(this));
+          m_journal_replay->shut_down(true, ctx);
         });
       m_journaler->stop_replay(ctx);
       return;
@@ -1621,7 +1594,7 @@ int Journal<I>::check_resync_requested(bool *do_resync) {
   librbd::journal::ClientData client_data;
   bufferlist::iterator bl_it = client.data.begin();
   try {
-    ::decode(client_data, bl_it);
+    decode(client_data, bl_it);
   } catch (const buffer::error &err) {
     lderr(cct) << this << " " << __func__ << ": "
                << "failed to decode client data: " << err << dendl;
