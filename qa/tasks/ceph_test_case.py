@@ -105,7 +105,11 @@ class CephTestCase(unittest.TestCase):
                 return found
 
             def __enter__(self):
-                self.watcher_process = ceph_manager.run_ceph_w(watch_channel)
+                # XXX: setting shell explicitly to False since setting it to
+                # True definitely leads to a crash  watcher_process.wait() is
+                # run in __exit__().
+                self.watcher_process = ceph_manager.run_ceph_w(watch_channel,
+                                                               shell=False)
 
             def __exit__(self, exc_type, exc_val, exc_tb):
                 if not self.watcher_process.finished:
