@@ -47,6 +47,7 @@ from IPy import IP
 import unittest
 import platform
 import logging
+import shlex
 
 from unittest import suite, loader
 
@@ -618,6 +619,9 @@ class LocalKernelMount(KernelMount):
             client_remote=LocalRemote(), hostfs_mntpt=hostfs_mntpt,
             cephfs_name=cephfs_name, cephfs_mntpt=cephfs_mntpt, brxnet=brxnet)
 
+    def define_mon_manager(self):
+        self.mon_manager = LocalCephManager()
+
     @property
     def config_path(self):
         return "./ceph.conf"
@@ -758,6 +762,9 @@ class LocalFuseMount(FuseMount):
     @property
     def config_path(self):
         return "./ceph.conf"
+
+    def define_mon_manager(self):
+        self.mon_manager = LocalCephManager()
 
     def get_keyring_path(self):
         # This is going to end up in a config file, so use an absolute path

@@ -12,10 +12,12 @@ from textwrap import dedent
 from IPy import IP
 
 from teuthology.contextutil import safe_while
-from teuthology.misc import get_file, sudo_write_file
+from teuthology.misc import get_file, sudo_write_file, get_first_mon
 from teuthology.orchestra import run
 from teuthology.orchestra.run import CommandFailedError, ConnectionLostError, Raw
 
+
+from tasks.ceph_manager import CephManager
 from tasks.cephfs.filesystem import Filesystem
 
 log = logging.getLogger(__name__)
@@ -57,6 +59,7 @@ class CephFSMount(object):
         self.cephfs_mntpt = cephfs_mntpt
 
         self.fs = None
+        self.define_mon_manager()
 
         self._netns_name = None
         self.nsid = -1
@@ -68,6 +71,11 @@ class CephFSMount(object):
         self.test_files = ['a', 'b', 'c']
 
         self.background_procs = []
+
+    def define_mon_manager(self):
+        first_mon = get_first_mon(self.ctx, None)
+        (_admin_remote,) = self.ctx.cluster.only(first_mon).remotes.keys()
+        self.mon_manager = ceph_manager.CephManager(_admin_remote, ctx=self.ctx, logger=log.getChild('ceph_manager'))
 
     # This will cleanup the stale netnses, which are from the
     # last failed test cases.
@@ -123,6 +131,16 @@ class CephFSMount(object):
     def netns_name(self, name):
         self._netns_name = name
 
+    def assert_that_ceph_fs_exists(self):
+        output = self.mon_manager.run_cluster_cmd(args=['fs', 'ls'], stdout=StringIO()).\
+            stdout.getvalue()
+        if self.cephfs_name:
+            assert self.cephfs_name in output, \
+                "expected ceph fs is not present on the cluster"
+        else:
+            assert 'No filesystems enabled' not in output, \
+                "ceph cluster has no ceph fs, not even the default ceph fs"
+
     def assert_and_log_minimum_mount_details(self):
         """
         Make sure we have minimum details required for mounting. Ideally, this
@@ -135,6 +153,8 @@ class CephFSMount(object):
                       '1. the client ID,\n2. the mountpoint and\n'
                       '3. the remote machine where CephFS will be mounted.\n')
             raise RuntimeError(errmsg)
+
+        self.assert_that_ceph_fs_exists()
 
         log.info('Mounting Ceph FS. Following are details of mount; remember '
                  '"None" represents Python type None -')
