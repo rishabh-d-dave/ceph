@@ -99,6 +99,7 @@ public:
    */
   void abort(int rc)
   {
+    // TODO, rishabh: no idea. idk the context.
     ceph_assert(rc != 0);
     abort_rc = rc;
   }

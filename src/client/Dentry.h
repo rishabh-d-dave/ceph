@@ -15,10 +15,13 @@ public:
     dir(_dir), name(_name), inode_xlist_link(this)
   {
     auto r = dir->dentries.insert(make_pair(name, this));
+    // TODO, rishabh: r.second will be False when insertion has failed.
+    // looks good. IMO.
     ceph_assert(r.second);
     dir->num_null_dentries++;
   }
   ~Dentry() {
+    // TODO, rishabh: is this redundant?
     ceph_assert(ref == 0);
     ceph_assert(dir == nullptr);
   }
@@ -28,12 +31,14 @@ public:
    * ref >1 -> pinned in lru
    */
   void get() {
+    // TODO, rishabh: looks good
     ceph_assert(ref > 0);
     if (++ref == 2)
       lru_pin();
     //cout << "dentry.get on " << this << " " << name << " now " << ref << std::endl;
   }
   void put() {
+    // TODO, rishabh: looks good
     ceph_assert(ref > 0);
     if (--ref == 1)
       lru_unpin();
@@ -59,6 +64,7 @@ public:
       if (inode->ll_ref)
         put(); // ll_ref -> dn pin
     }
+    // TODO, rishabh: redundant but good to have
     ceph_assert(inode_xlist_link.get_list() == &inode->dentries);
     inode_xlist_link.remove_myself();
     inode.reset();
@@ -69,8 +75,11 @@ public:
       inode->dentries.push_front(&inode_xlist_link);
   }
   void detach(void) {
+    // TODO, rishabh: looks good. inode.reset() in unlink must set inode
+    // it NULL most likely
     ceph_assert(!inode);
     auto p = dir->dentries.find(name);
+    // TODO, rishabh: looks good.
     ceph_assert(p != dir->dentries.end());
     dir->dentries.erase(p);
     dir->num_null_dentries--;
