@@ -128,6 +128,7 @@ struct RWRefState {
     }
 
     bool check_current_state(T require) const {
+      // TODO, rishabh: no idea.
       ceph_assert(is_valid_state(require));
 
       std::scoped_lock l{lock};
@@ -152,6 +153,7 @@ public:
 
   RWRef(RWRefState<T> &s, T require, bool ir=true)
     :S(s), is_reader(ir) {
+    // TODO, rishabh: no idea.
     ceph_assert(S.is_valid_state(require));
 
     std::scoped_lock l{S.lock};
@@ -191,7 +193,9 @@ public:
    * Update the state, and only the writer could do the update.
    */
   void update_state(T new_state) {
+    // TODO, rishabh: looks good.
     ceph_assert(!is_reader);
+    // TODO, rishabh: no idea
     ceph_assert(S.is_valid_state(new_state));
 
     std::scoped_lock l{S.lock};
@@ -209,6 +213,7 @@ public:
    * Will wait for all the in-flight "readers" to finish
    */
   void wait_readers_done() {
+    // TODO, rishabh: looks good.
     // Only writers can wait
     ceph_assert(!is_reader);
 

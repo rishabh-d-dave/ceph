@@ -62,6 +62,7 @@ MetaRequest::~MetaRequest()
 }
 
 void MetaRequest::set_dentry(Dentry *d) {
+  // TODO, rishabh: looks good.
   ceph_assert(_dentry == NULL);
   _dentry = d;
   _dentry->get();
@@ -71,6 +72,7 @@ Dentry *MetaRequest::dentry() {
 }
 
 void MetaRequest::set_old_dentry(Dentry *d) {
+  // TODO, rishabh: looks good.
   ceph_assert(_old_dentry == NULL);
   _old_dentry = d;
   _old_dentry->get();

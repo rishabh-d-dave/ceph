@@ -166,6 +166,7 @@ public:
 static int getgroups(fuse_req_t req, gid_t **sgids)
 {
 #if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 8)
+  // TODO, rishabh: no idea. idk the context.
   ceph_assert(sgids);
   int c = fuse_req_getgroups(req, 0, NULL);
   if (c < 0) {
@@ -1322,6 +1323,7 @@ int CephFuse::Handle::init(int argc, const char *argv[])
   }
 #endif
 
+  // TODO, rishabh: looks good -- log errmsg and errno
   ceph_assert(args.allocated);  // Checking fuse has realloc'd args so we can free newargv
   free(newargv);
 
@@ -1421,6 +1423,7 @@ uint64_t CephFuse::Handle::fino_snap(uint64_t fino)
   } else {
     std::lock_guard l(stag_lock);
     uint64_t stag = FINO_STAG(fino);
+    // TODO, rishabh: no idea. idk the context
     ceph_assert(stag_snap_map.count(stag));
     return stag_snap_map[stag];
   }

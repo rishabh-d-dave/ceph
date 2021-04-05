@@ -941,9 +941,13 @@ int SyntheticClient::run()
 
 int SyntheticClient::start_thread()
 {
+  // TODO, rishabh: no idea. replace with an exception and a proper log
+  // message.
   ceph_assert(!thread_id);
 
   pthread_create(&thread_id, NULL, synthetic_client_thread_entry, this);
+  // TODO, rishabh: no idea. replace with an exception and a proper log
+  // message.
   ceph_assert(thread_id);
   ceph_pthread_setname(thread_id, "client");
   return 0;
@@ -951,6 +955,8 @@ int SyntheticClient::start_thread()
 
 int SyntheticClient::join_thread()
 {
+  // TODO, rishabh: no idea. replace with an exception and a proper log
+  // message.
   ceph_assert(thread_id);
   void *rv;
   pthread_join(thread_id, &rv);
@@ -2749,6 +2755,7 @@ int SyntheticClient::random_walk(int num_req)
       else {
         r = client->open(get_random_sub(), O_RDONLY, perms);
         if (r > 0) {
+	  // TODO, rishabh: no idea.
           ceph_assert(open_files.count(r) == 0);
           open_files.insert(r);
         }
@@ -2902,6 +2909,7 @@ void SyntheticClient::foo()
     char buffer[8192]; 
     client->unlink(fn, perms);
     int handle = client->open(fn, O_CREAT|O_RDWR, perms, S_IRWXU);
+    // TODO, rishabh: is this func a test?
     ceph_assert(handle>=0);
     int r=client->write(handle,buffer,8192);
     ceph_assert(r>=0);
@@ -3210,6 +3218,7 @@ void SyntheticClient::import_find(const char *base, const char *find, bool data)
     client->mkdir(base, 0755, process_perms);
 
   ifstream f(find);
+  // TODO, rishabh: no idea.
   ceph_assert(f.is_open());
   
   int dirnum = 0;
@@ -3238,6 +3247,7 @@ void SyntheticClient::import_find(const char *base, const char *find, bool data)
     // ignore "."
     if (filename == ".") continue;
 
+    // TODO, rishabh: looks good.
     // remove leading ./
     ceph_assert(filename[0] == '.' && filename[1] == '/');
     filename = filename.substr(2);
