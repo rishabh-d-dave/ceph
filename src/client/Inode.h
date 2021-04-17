@@ -178,6 +178,7 @@ struct Inode : RefCountedObject {
     int which = dir_layout.dl_dir_hash;
     if (!which)
       which = CEPH_STR_HASH_LINUX;
+    // TODO, rishabh: keep it, looks valid.
     ceph_assert(ceph_str_hash_valid(which));
     return ceph_str_hash(which, dn.data(), dn.length());
   }
@@ -230,6 +231,7 @@ struct Inode : RefCountedObject {
   uint64_t requested_max_size = 0;
 
   uint64_t  ll_ref = 0;   // separate ref count for ll client
+  // TODO, rishabh: where is this list populated?
   xlist<Dentry *> dentries; // if i'm linked to a dentry.
   std::string    symlink;  // symlink content, if it's a symlink
   std::map<std::string,bufferptr> xattrs;
@@ -241,6 +243,11 @@ struct Inode : RefCountedObject {
   std::list<ceph::condition_variable*> waitfor_deleg;
 
   Dentry *get_first_parent() {
+    // TODO, rishabh: keep it. practically speaking, ceph_assert()ing here is
+    // redundant since all calls are made to this method only if dentries are
+    // not empty. but ideally, this call to ceph_assert() is pretty good
+    // failsafe IMO since lack of a check on caller's side will certainly
+    // open a possibility for a bug.
     ceph_assert(!dentries.empty());
     return *dentries.begin();
   }
@@ -258,6 +265,7 @@ struct Inode : RefCountedObject {
     ll_ref++;
   }
   void ll_put(uint64_t n=1) {
+    // TODO, rishabh: much needed, keep it.
     ceph_assert(ll_ref >= n);
     ll_ref -= n;
   }

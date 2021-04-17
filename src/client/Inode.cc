@@ -29,17 +29,21 @@ Inode::~Inode()
     snapdir_parent.reset();
   }
 
+  lsubdout(client->cct, client, 0) << "debugtoken starts" << dendl;
   if (!oset.objects.empty()) {
     lsubdout(client->cct, client, 0) << __func__ << ": leftover objects on inode 0x"
       << std::hex << ino << std::dec << dendl;
+    // TODO, rishabh: how did oset got empty??!
     ceph_assert(oset.objects.empty());
   }
 
   if (!delegations.empty()) {
     lsubdout(client->cct, client, 0) << __func__ << ": leftover delegations on inode 0x"
       << std::hex << ino << std::dec << dendl;
+    // TODO, rishabh: how did delegations got empty??!
     ceph_assert(delegations.empty());
   }
+  lsubdout(client->cct, client, 0) << "debugtoken end" << dendl;
 }
 
 ostream& operator<<(ostream &out, const Inode &in)
@@ -97,6 +101,7 @@ void Inode::make_long_path(filepath& p)
 {
   if (!dentries.empty()) {
     Dentry *dn = get_first_parent();
+    // TODO, rishabh: looks good?
     ceph_assert(dn->dir && dn->dir->parent_inode);
     dn->dir->parent_inode->make_long_path(p);
     p.push_dentry(dn->name);
@@ -110,6 +115,7 @@ void Inode::make_short_path(filepath& p)
 {
   if (!dentries.empty()) {
     Dentry *dn = get_first_parent();
+    // TODO, rishabh: looks good?
     ceph_assert(dn->dir && dn->dir->parent_inode);
     p = filepath(dn->name, dn->dir->parent_inode->ino);
   } else if (snapdir_parent) {
@@ -133,6 +139,7 @@ void Inode::make_nosnap_relative_path(filepath& p)
     p.push_dentry(empty);
   } else if (!dentries.empty()) {
     Dentry *dn = get_first_parent();
+    // TODO, rishabh: looks good?
     ceph_assert(dn->dir && dn->dir->parent_inode);
     dn->dir->parent_inode->make_nosnap_relative_path(p);
     p.push_dentry(dn->name);
@@ -155,6 +162,7 @@ bool Inode::put_open_ref(int mode)
 {
   //cout << "open_by_mode[" << mode << "] " << open_by_mode[mode] << " -> " << (open_by_mode[mode]-1) << std::endl;
   auto& ref = open_by_mode.at(mode);
+  // TODO, rishabh: no idea.
   ceph_assert(ref > 0);
   client->dec_opened_files();
   if (--ref == 0) {
@@ -187,6 +195,7 @@ int Inode::put_cap_ref(int cap)
       int c = 1 << n;
       if (cap_refs[c] <= 0) {
 	lderr(client->cct) << "put_cap_ref " << ccap_string(c) << " went negative on " << *this << dendl;
+	// TODO, rishabh: looks good.
 	ceph_assert(cap_refs[c] > 0);
       }
       if (--cap_refs[c] == 0)
@@ -383,6 +392,7 @@ Dir *Inode::open_dir()
   if (!dir) {
     dir = new Dir(this);
     lsubdout(client->cct, client, 15) << "open_dir " << dir << " on " << this << dendl;
+    // TODO, rishabh: looks good, keep it.
     ceph_assert(dentries.size() < 2); // dirs can't be hard-linked
     if (!dentries.empty())
       get_first_parent()->get();      // pin dentry
