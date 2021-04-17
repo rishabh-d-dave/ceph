@@ -159,6 +159,7 @@ struct dir_result_t {
     if (hash)
       v |= HASH;
     else
+      // TODO, rishabh: looks valid.
       ceph_assert((v & HASH) != HASH);
     return v;
   }

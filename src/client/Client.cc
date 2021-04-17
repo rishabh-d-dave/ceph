@@ -262,12 +262,15 @@ void Client::_assign_faked_ino(Inode *in)
     last_used_faked_ino = 2048;
     it = free_faked_inos.lower_bound(last_used_faked_ino + 1);
   }
+  // TODO, rishabh: looks good but inspect again.
   ceph_assert(it != free_faked_inos.end());
   if (last_used_faked_ino < it.get_start()) {
+    // TODO, rishabh: inspection left.
     ceph_assert(it.get_len() > 0);
     last_used_faked_ino = it.get_start();
   } else {
     ++last_used_faked_ino;
+    // TODO, rishabh: inspection left.
     ceph_assert(it.get_start() + it.get_len() > last_used_faked_ino);
   }
   in->faked_ino = last_used_faked_ino;
@@ -381,6 +384,7 @@ Client::Client(Messenger *m, MonClient *mc, Objecter *objecter_)
 
 Client::~Client()
 {
+  // TODO, rishabh: abort with an log message.
   ceph_assert(ceph_mutex_is_not_locked(client_lock));
 
   // If the task is crashed or aborted and doesn't
@@ -419,6 +423,7 @@ void Client::tear_down_cache()
   // caps!
   // *** FIXME ***
 
+  // TODO, rishabh: looks OK?
   // empty lru
   trim_cache();
   ceph_assert(lru.lru_get_size() == 0);
@@ -429,6 +434,7 @@ void Client::tear_down_cache()
     root.reset();
   }
 
+  // TODO, rishabh: looks OK?
   ceph_assert(inode_map.empty());
 }
 
@@ -516,6 +522,7 @@ void Client::dump_cache(Formatter *f)
 
 void Client::dump_status(Formatter *f)
 {
+  // TODO, rishabh: abort but with a log message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   ldout(cct, 1) << __func__ << dendl;
@@ -560,6 +567,7 @@ void Client::_pre_init()
 int Client::init()
 {
   RWRef_t iref_writer(initialize_state, CLIENT_INITIALIZING, false);
+  // TODO, rishabh: much needed.
   ceph_assert(iref_writer.is_first_writer());
 
   _pre_init();
@@ -1109,6 +1117,7 @@ void Client::update_dentry_lease(Dentry *dn, LeaseStat *dlease, utime_t from, Me
 
   ldout(cct, 15) << __func__ << " " << *dn << " " << *dlease << " from " << from << dendl;
   
+  // TODO, rishabh: looks ok
   ceph_assert(dn);
 
   if (dlease->mask & CEPH_LEASE_VALID) {
@@ -1280,6 +1289,7 @@ void Client::insert_readdir_results(MetaRequest *request, MetaSession *session, 
 	  // replace incorrect dentry
 	  unlink(olddn, true, true);  // keep dir, dentry
 	  dn = link(dir, dname, in, olddn);
+	  // TODO, rishabh: redundant; get rid of it.
 	  ceph_assert(dn == olddn);
 	} else {
 	  // keep existing dn
@@ -1374,6 +1384,8 @@ Inode* Client::insert_trace(MetaRequest *request, MetaSession *session)
 	// rename
 	Dentry *od = request->old_dentry();
 	ldout(cct, 10) << " unlinking rename src dn " << od << " for traceless reply" << dendl;
+	// TODO, rishabh: looks good since MetaRequest._old_dentry is inited
+	// to NULL
 	ceph_assert(od);
 	unlink(od, true, true);  // keep dir, dentry
       } else if (op == CEPH_MDS_OP_RMDIR ||
@@ -2167,6 +2179,7 @@ MetaSession *Client::_open_mds_session(mds_rank_t mds)
   auto em = mds_sessions.emplace(std::piecewise_construct,
       std::forward_as_tuple(mds),
       std::forward_as_tuple(mds, messenger->connect_to_mds(addrs), addrs));
+  // TODO, rishabh: much needed, add errmsg and errno.
   ceph_assert(em.second); /* not already present */
   MetaSession *session = &em.first->second;
 
@@ -2309,6 +2322,8 @@ void Client::handle_client_session(const MConstRef<MClientSession>& m)
 
 bool Client::_any_stale_sessions() const
 {
+  // TODO, rishabh: looks good. abort but with an error number and error
+  // message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   for (const auto &p : mds_sessions) {
@@ -3221,6 +3236,7 @@ void Client::_put_inode(Inode *in, int n)
 
 void Client::delay_put_inodes(bool wakeup)
 {
+  // TODO, rishabh: looks good, add a log message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   std::map<Inode*,int> release;
@@ -3345,6 +3361,7 @@ private:
 public:
   C_Client_FlushComplete(Client *c, Inode *in) : client(c), inode(in) { }
   void finish(int r) override {
+    // TODO, rishabh: looks good. abort but with a error number and message.
     ceph_assert(ceph_mutex_is_locked_by_me(client->client_lock));
     if (r != 0) {
       client_t const whoami = client->whoami;  // For the benefit of ldout prefix
@@ -4071,6 +4088,7 @@ public:
       ino = in->vino();
   }
   void finish(int r) override {
+    // TODO, rishabh: looks good. abort but with a error number and message.
     // _async_invalidate takes the lock when it needs to, call this back from outside of lock.
     ceph_assert(ceph_mutex_is_not_locked_by_me(client->client_lock));
     client->_async_invalidate(ino, offset, length);
@@ -4156,6 +4174,7 @@ bool Client::_flush(Inode *in, Context *onfinish)
 
 void Client::_flush_range(Inode *in, int64_t offset, uint64_t size)
 {
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
   if (!in->oset.dirty_or_tx) {
     ldout(cct, 10) << " nothing to flush" << dendl;
@@ -4175,6 +4194,7 @@ void Client::_flush_range(Inode *in, int64_t offset, uint64_t size)
 
 void Client::flush_set_callback(ObjectCacher::ObjectSet *oset)
 {
+  // TODO, rishabh: looks good. abort but with a error number and message.
   //  std::scoped_lock l(client_lock);
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));   // will be called via dispatch() -> objecter -> ...
   Inode *in = static_cast<Inode *>(oset->parent);
@@ -4506,6 +4526,7 @@ public:
       ino = in->vino();
   }
   void finish(int r) override {
+    // TODO, rishabh: looks good. abort but with a error number and message.
     ceph_assert(ceph_mutex_is_not_locked_by_me(client->client_lock));
     client->_async_inode_release(ino);
   }
@@ -5358,6 +5379,7 @@ public:
 	ino.ino = inodeno_t();
   }
   void finish(int r) override {
+    // TODO, rishabh: looks good. abort but with a error number and message.
     // _async_dentry_invalidate is responsible for its own locking
     ceph_assert(ceph_mutex_is_not_locked_by_me(client->client_lock));
     client->_async_dentry_invalidate(dirino, ino, name);
@@ -5928,6 +5950,7 @@ int Client::resolve_mds(
  */
 int Client::authenticate()
 {
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   if (monclient->is_authenticated()) {
@@ -5949,6 +5972,7 @@ int Client::authenticate()
 
 int Client::fetch_fsmap(bool user)
 {
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   // Retrieve FSMap to enable looking up daemon addresses.  We need FSMap
@@ -6542,6 +6566,7 @@ void Client::flush_cap_releases()
 
 void Client::renew_and_flush_cap_releases()
 {
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   if (!mount_aborted && mdsmap->get_epoch()) {
@@ -6644,6 +6669,7 @@ void Client::start_tick_thread()
 void Client::collect_and_send_metrics() {
   ldout(cct, 20) << __func__ << dendl;
 
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   // right now, we only track and send global metrics. its sufficient
@@ -6653,6 +6679,7 @@ void Client::collect_and_send_metrics() {
 
 void Client::collect_and_send_global_metrics() {
   ldout(cct, 20) << __func__ << dendl;
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   if (!have_open_session((mds_rank_t)0)) {
@@ -6762,6 +6789,7 @@ int Client::_do_lookup(Inode *dir, const string& name, int mask,
 
 bool Client::_dentry_valid(const Dentry *dn)
 {
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   // is dn lease valid?
@@ -8655,6 +8683,7 @@ struct dentry_off_lt {
 int Client::_readdir_cache_cb(dir_result_t *dirp, add_dirent_cb_t cb, void *p,
 			      int caps, bool getref)
 {
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
   ldout(cct, 10) << __func__ << " " << dirp << " on " << dirp->inode->ino
 	   << " last_name " << dirp->last_name << " offset " << hex << dirp->offset << dec
@@ -9728,6 +9757,7 @@ void Client::lock_fh_pos(Fh *f)
 
 void Client::unlock_fh_pos(Fh *f)
 {
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   ldout(cct, 10) << __func__ << " " << f << dendl;
@@ -9829,6 +9859,7 @@ int Client::preadv(int fd, const struct iovec *iov, int iovcnt, loff_t offset)
 
 int64_t Client::_read(Fh *f, int64_t offset, uint64_t size, bufferlist *bl)
 {
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   int want, have = 0;
@@ -9995,6 +10026,7 @@ void Client::C_Readahead::finish(int r) {
 
 int Client::_read_async(Fh *f, uint64_t off, uint64_t len, bufferlist *bl)
 {
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   const auto& conf = cct->_conf;
@@ -10053,6 +10085,7 @@ int Client::_read_async(Fh *f, uint64_t off, uint64_t len, bufferlist *bl)
 int Client::_read_sync(Fh *f, uint64_t off, uint64_t len, bufferlist *bl,
 		       bool *checkeof)
 {
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   Inode *in = f->inode.get();
@@ -10226,6 +10259,7 @@ int Client::_preadv_pwritev(int fd, const struct iovec *iov, unsigned iovcnt, in
 int64_t Client::_write(Fh *f, int64_t offset, uint64_t size, const char *buf,
 	                const struct iovec *iov, int iovcnt)
 {
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   uint64_t fpos = 0;
@@ -10542,6 +10576,7 @@ int Client::fsync(int fd, bool syncdataonly)
 
 int Client::_fsync(Inode *in, bool syncdataonly)
 {
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   int r = 0;
@@ -10743,6 +10778,7 @@ void Client::_getcwd(string& dir, const UserPerm& perms)
 
   Inode *in = cwd.get();
   while (in != root.get()) {
+    // TODO, rishabh: looks good.
     ceph_assert(in->dentries.size() < 2); // dirs can't be hard-linked
 
     // A cwd or ancester is unlinked
@@ -11313,6 +11349,7 @@ int Client::test_dentry_handling(bool can_invalidate)
 
 int Client::_sync_fs()
 {
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   ldout(cct, 10) << __func__ << dendl;
@@ -11740,6 +11777,7 @@ void Client::_ll_get(Inode *in)
   if (in->ll_ref == 0) {
     in->iget();
     if (in->is_dir() && !in->dentries.empty()) {
+      // TODO, rishabh: looks good.
       ceph_assert(in->dentries.size() == 1); // dirs can't be hard-linked
       in->get_first_parent()->get(); // pin dentry
     }
@@ -11756,6 +11794,7 @@ int Client::_ll_put(Inode *in, uint64_t num)
   ldout(cct, 20) << __func__ << " " << in << " " << in->ino << " " << num << " -> " << in->ll_ref << dendl;
   if (in->ll_ref == 0) {
     if (in->is_dir() && !in->dentries.empty()) {
+      // TODO, rishabh: looks good.
       ceph_assert(in->dentries.size() == 1); // dirs can't be hard-linked
       in->get_first_parent()->put(); // unpin dentry
     }
@@ -14444,6 +14483,7 @@ int Client::ll_sync_inode(Inode *in, bool syncdataonly)
 
 int Client::_fallocate(Fh *fh, int mode, int64_t offset, int64_t length)
 {
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   if (offset < 0 || length <= 0)
@@ -15148,6 +15188,7 @@ enum {
 
 int Client::check_pool_perm(Inode *in, int need)
 {
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   if (!cct->_conf->client_check_pool_perm)
@@ -15599,6 +15640,7 @@ void intrusive_ptr_release(Inode *in)
 
 mds_rank_t Client::_get_random_up_mds() const
 {
+  // TODO, rishabh: looks good. abort but with a error number and message.
   ceph_assert(ceph_mutex_is_locked_by_me(client_lock));
 
   std::set<mds_rank_t> up;
