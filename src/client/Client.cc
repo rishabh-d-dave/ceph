@@ -462,8 +462,7 @@ void Client::dump_inode(Formatter *f, Inode *in, set<Inode*>& did, bool disconne
   did.insert(in);
   if (in->dir) {
     ldout(cct, 1) << "  dir " << in->dir << " size " << in->dir->dentries.size() << dendl;
-    for (ceph::unordered_map<string, Dentry*>::iterator it = in->dir->dentries.begin();
-         it != in->dir->dentries.end();
+    for (auto it = in->dir->dentries.begin(); it != in->dir->dentries.end();
          ++it) {
       ldout(cct, 1) << "   " << in->ino << " dn " << it->first << " " << it->second << " ref " << it->second->ref << dendl;
       if (f) {
@@ -490,7 +489,7 @@ void Client::dump_cache(Formatter *f)
     dump_inode(f, root.get(), did, true);
 
   // make a second pass to catch anything disconnected
-  for (ceph::unordered_map<vinodeno_t, Inode*>::iterator it = inode_map.begin();
+  for (auto it = inode_map.begin();
        it != inode_map.end();
        ++it) {
     if (did.count(it->second))
@@ -868,7 +867,7 @@ void Client::update_inode_file_time(Inode *in, int issued, uint64_t time_warp_se
 
 void Client::_fragmap_remove_non_leaves(Inode *in)
 {
-  for (map<frag_t,int>::iterator p = in->fragmap.begin(); p != in->fragmap.end(); )
+  for (auto p = in->fragmap.begin(); p != in->fragmap.end(); )
     if (!in->dirfragtree.is_leaf(p->first))
       in->fragmap.erase(p++);
     else
@@ -1646,9 +1645,7 @@ void Client::dump_mds_sessions(Formatter *f, bool cap_dump)
 
 void Client::dump_mds_requests(Formatter *f)
 {
-  for (map<ceph_tid_t, MetaRequest*>::iterator p = mds_requests.begin();
-       p != mds_requests.end();
-       ++p) {
+  for (auto p = mds_requests.begin(); p != mds_requests.end(); ++p) {
     f->open_object_section("request");
     p->second->dump(f);
     f->close_section();
@@ -2586,8 +2583,7 @@ void Client::_handle_full_flag(int64_t pool)
   // field with -CEPHFS_ENOSPC as long as we're sure all the ops we cancelled were
   // affecting this pool, and all the objectsets we're purging were also
   // in this pool.
-  for (unordered_map<vinodeno_t,Inode*>::iterator i = inode_map.begin();
-       i != inode_map.end(); ++i)
+  for (auto i = inode_map.begin(); i != inode_map.end(); ++i)
   {
     Inode *inode = i->second;
     if (inode->oset.dirty_or_tx
@@ -2936,9 +2932,7 @@ void Client::send_reconnect(MetaSession *session)
 
   // i have an open session.
   ceph::unordered_set<inodeno_t> did_snaprealm;
-  for (ceph::unordered_map<vinodeno_t, Inode*>::iterator p = inode_map.begin();
-       p != inode_map.end();
-       ++p) {
+  for (auto p = inode_map.begin(); p != inode_map.end(); ++p) {
     Inode *in = p->second;
     auto it = in->caps.find(mds);
     if (it != in->caps.end()) {
@@ -3008,9 +3002,7 @@ void Client::send_reconnect(MetaSession *session)
 void Client::kick_requests(MetaSession *session)
 {
   ldout(cct, 10) << __func__ << " for mds." << session->mds_num << dendl;
-  for (map<ceph_tid_t, MetaRequest*>::iterator p = mds_requests.begin();
-       p != mds_requests.end();
-       ++p) {
+  for (auto p = mds_requests.begin(); p != mds_requests.end(); ++p) {
     MetaRequest *req = p->second;
     if (req->got_unsafe)
       continue;
@@ -3031,16 +3023,12 @@ void Client::kick_requests(MetaSession *session)
 
 void Client::resend_unsafe_requests(MetaSession *session)
 {
-  for (xlist<MetaRequest*>::iterator iter = session->unsafe_requests.begin();
-       !iter.end();
-       ++iter)
+  for (auto iter = session->unsafe_requests.begin(); !iter.end(); ++iter)
     send_request(*iter, session);
 
   // also re-send old requests when MDS enters reconnect stage. So that MDS can
   // process completed requests in clientreplay stage.
-  for (map<ceph_tid_t, MetaRequest*>::iterator p = mds_requests.begin();
-       p != mds_requests.end();
-       ++p) {
+  for (auto p = mds_requests.begin(); p != mds_requests.end(); ++p) {
     MetaRequest *req = p->second;
     if (req->got_unsafe)
       continue;
@@ -3065,9 +3053,7 @@ void Client::wait_unsafe_requests()
     }
   }
 
-  for (list<MetaRequest*>::iterator p = last_unsafe_reqs.begin();
-       p != last_unsafe_reqs.end();
-       ++p) {
+  for (auto p = last_unsafe_reqs.begin(); p != last_unsafe_reqs.end(); ++p) {
     MetaRequest *req = *p;
     if (req->unsafe_item.is_on_list())
       wait_on_list(req->waitfor_safe);
@@ -3078,8 +3064,7 @@ void Client::wait_unsafe_requests()
 void Client::kick_requests_closed(MetaSession *session)
 {
   ldout(cct, 10) << __func__ << " for mds." << session->mds_num << dendl;
-  for (map<ceph_tid_t, MetaRequest*>::iterator p = mds_requests.begin();
-       p != mds_requests.end(); ) {
+  for (auto p = mds_requests.begin(); p != mds_requests.end(); ) {
     MetaRequest *req = p->second;
     ++p;
     if (req->mds == session->mds_num) {
@@ -4439,9 +4424,8 @@ void Client::_invalidate_kernel_dcache()
 
   if (can_invalidate_dentries) {
     if (dentry_invalidate_cb && root->dir) {
-      for (ceph::unordered_map<string, Dentry*>::iterator p = root->dir->dentries.begin();
-         p != root->dir->dentries.end();
-         ++p) {
+      for (auto p = root->dir->dentries.begin();
+	   p != root->dir->dentries.end(); ++p) {
        if (p->second->inode)
         _schedule_invalidate_dentry_callback(p->second, false);
       }
@@ -4587,7 +4571,7 @@ void Client::trim_caps(MetaSession *s, uint64_t max)
 void Client::force_session_readonly(MetaSession *s)
 {
   s->readonly = true;
-  for (xlist<Cap*>::iterator p = s->caps.begin(); !p.end(); ++p) {
+  for (auto p = s->caps.begin(); !p.end(); ++p) {
     auto &in = (*p)->inode;
     if (in.caps_wanted() & CEPH_CAP_FILE_WR)
       signal_cond_list(in.waitfor_caps);
@@ -4631,7 +4615,7 @@ void Client::adjust_session_flushing_caps(Inode *in, MetaSession *old_s,  MetaSe
       new_s->flushing_caps_tids.insert(capsnap.flush_tid);
     }
   }
-  for (map<ceph_tid_t, int>::iterator it = in->flushing_cap_tids.begin();
+  for (auto it = in->flushing_cap_tids.begin();
        it != in->flushing_cap_tids.end();
        ++it) {
     old_s->flushing_caps_tids.erase(it->first);
@@ -4747,7 +4731,7 @@ void Client::kick_flushing_caps(MetaSession *session)
   mds_rank_t mds = session->mds_num;
   ldout(cct, 10) << __func__ << " mds." << mds << dendl;
 
-  for (xlist<Inode*>::iterator p = session->flushing_caps.begin(); !p.end(); ++p) {
+  for (auto p = session->flushing_caps.begin(); !p.end(); ++p) {
     Inode *in = *p;
     if (in->flags & I_KICK_FLUSH) {
       ldout(cct, 20) << " reflushing caps on " << *in << " to mds." << mds << dendl;
@@ -4758,7 +4742,7 @@ void Client::kick_flushing_caps(MetaSession *session)
 
 void Client::early_kick_flushing_caps(MetaSession *session)
 {
-  for (xlist<Inode*>::iterator p = session->flushing_caps.begin(); !p.end(); ++p) {
+  for (auto p = session->flushing_caps.begin(); !p.end(); ++p) {
     Inode *in = *p;
     Cap *cap = in->auth_cap;
     ceph_assert(cap);
@@ -4811,7 +4795,7 @@ void SnapRealm::build_snap_context()
   cached_snap_context.seq = max_seq;
   cached_snap_context.snaps.resize(0);
   cached_snap_context.snaps.reserve(snaps.size());
-  for (set<snapid_t>::reverse_iterator p = snaps.rbegin(); p != snaps.rend(); ++p)
+  for (auto p = snaps.rbegin(); p != snaps.rend(); ++p)
     cached_snap_context.snaps.push_back(*p);
 }
 
@@ -4827,9 +4811,7 @@ void Client::invalidate_snaprealm_and_children(SnapRealm *realm)
     ldout(cct, 10) << __func__ << " " << *realm << dendl;
     realm->invalidate_cache();
 
-    for (set<SnapRealm*>::iterator p = realm->pchildren.begin();
-	 p != realm->pchildren.end(); 
-	 ++p)
+    for (auto p = realm->pchildren.begin(); p != realm->pchildren.end(); ++p)
       q.push_back(*p);
   }
 }
@@ -4922,7 +4904,7 @@ void Client::update_snap_trace(const bufferlist& bl, SnapRealm **realm_ret, bool
 	  SnapRealm *realm = q.front();
 	  q.pop_front();
 
-	  for (set<SnapRealm*>::iterator p = realm->pchildren.begin(); 
+	  for (auto p = realm->pchildren.begin();
 	       p != realm->pchildren.end();
 	       ++p)
 	    q.push_back(*p);
@@ -11107,9 +11089,7 @@ void Client::_release_filelocks(Fh *fh)
   fl.l_whence = SEEK_SET;
   fl.l_type = F_UNLCK;
 
-  for (list<pair<int, ceph_filelock> >::iterator p = to_release.begin();
-       p != to_release.end();
-       ++p) {
+  for (auto p = to_release.begin(); p != to_release.end(); ++p) {
     fl.l_start = p->second.start;
     fl.l_len = p->second.length;
     fl.l_pid = p->second.pid;
@@ -11753,9 +11733,7 @@ void Client::_ll_drop_pins()
   ldout(cct, 10) << __func__ << dendl;
   std::set<InodeRef> to_be_put; //this set will be deconstructed item by item when exit
   ceph::unordered_map<vinodeno_t, Inode*>::iterator next;
-  for (ceph::unordered_map<vinodeno_t, Inode*>::iterator it = inode_map.begin();
-       it != inode_map.end();
-       it = next) {
+  for (auto it = inode_map.begin(); it != inode_map.end(); it = next) {
     Inode *in = it->second;
     next = it;
     ++next;
@@ -12469,7 +12447,7 @@ int Client::_setxattr_check_data_pool(string& name, string& value, const OSDMap 
     }
     if (begin != end)
       return -CEPHFS_EINVAL;
-    for (map<string,string>::iterator q = m.begin(); q != m.end(); ++q) {
+    for (auto q = m.begin(); q != m.end(); ++q) {
       if (q->first == "pool") {
 	tmp = q->second;
 	break;
