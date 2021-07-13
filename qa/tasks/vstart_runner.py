@@ -361,7 +361,25 @@ class LocalRemote(object):
         """
         self.write_file(path, data, sudo=True, **kwargs)
 
-    def _perform_checks_and_return_list_of_args(self, args, omit_sudo):
+    def _perform_checks_when_str(self, args, omit_sudo, shell):
+        # We'll let sudo be a part of command even omit flag says otherwise in
+        # cases of commands which can normally be ran only by root.
+        if 'sudo' in args:
+            for x in ('-u', 'passwd', 'chown'):
+                if args.find(x) != -1:
+                    omit_sudo = False
+
+            if omit_sudo:
+                args.replace('sudo', '')
+
+        args = args.replace('adjust-ulimits','')
+        args = args.replace('ceph-coverage', '')
+
+        log.debug('> ' + args)
+
+        return args
+
+    def _perform_checks_when_list(self, args, omit_sudo, shell):
         # We'll let sudo be a part of command even omit flag says otherwise in
         # cases of commands which can normally be ran only by root.
         try:
@@ -398,58 +416,6 @@ class LocalRemote(object):
         if omit_sudo:
             args = [a for a in args if a != "sudo"]
 
-        return args
-
-    @staticmethod
-    def split_cmds(cmds):
-        """
-        We might've received a sequence of commands instead of a single
-        command. It might be in form of str where each command is separated
-        by a newline or it might be in form of list. This method separate
-        each command into a separate list and each command is split into list
-        of arguments.
-
-        Returns list of lists in which each list contains command arguments in
-        str form.
-        """
-        if isinstance(cmds , str):
-            cmds = [cmd.split() for cmd in cmds.split('\n')]
-        else:
-            assert isinstance(cmds, list)
-            # TODO: should've we expect/allow of list of lists as well?
-            assert all(isinstance(arg, str) for arg in cmds)
-            cmds = [cmds]
-
-        # guard against empty list. 'ls /usr\n' will produce list containing
-        # empty list, for example.
-        return [cmd for cmd in cmds if cmd]
-
-    # Wrapper to keep the interface exactly same as that of
-    # teuthology.remote.run.
-    def run(self, **kwargs):
-        """
-        Prepare arguments and get them executed.
-
-        We might have multiple commands in kwargs['args'] as list within list
-        or as string with newlines.
-        """
-        for cmd in self.split_cmds(kwargs['args']):
-            kwargs['args'] = cmd
-            retval = self._do_run(**kwargs)
-        return retval
-
-    # XXX: omit_sudo is set to True since using sudo can change the ownership
-    # of files which becomes problematic for following executions of
-    # vstart_runner.py.
-    def _do_run(self, args, check_status=True, wait=True, stdout=None,
-                stderr=None, cwd=None, stdin=None, logger=None, label=None,
-                env=None, timeout=None, omit_sudo=True, shell=True):
-        args = self._perform_checks_and_return_list_of_args(args, omit_sudo)
-
-        # We have to use shell=True if any run.Raw was present, e.g. &&
-        if not shell:
-            shell = any([a for a in args if isinstance(a, Raw)])
-
         # Filter out helper tools that don't exist in a vstart environment
         args = [a for a in args if a not in ('adjust-ulimits',
                                              'ceph-coverage')]
@@ -462,8 +428,39 @@ class LocalRemote(object):
             if os.path.exists(local_bin):
                 args = [local_bin] + args[1:]
 
+        # We have to use shell=True if any run.Raw was present, e.g. &&
+        if not shell:
+            shell = any([a for a in args if isinstance(a, Raw)])
+
         log.debug('> ' +
-                 ' '.join([str(a.value) if isinstance(a, Raw) else a for a in args]))
+                  ' '.join([str(a.value) if isinstance(a, Raw) else a for a in args]))
+
+        return args
+
+    def _perform_checks(self, args, omit_sudo, shell):
+        if isinstance(args, str):
+            return self._perform_checks_when_str(args, omit_sudo, shell)
+        elif isinstance(args, list):
+            return self._perform_checks_when_list(args, omit_sudo, shell)
+
+    # Wrapper to keep the interface exactly same as that of
+    # teuthology.remote.run.
+    def run(self, **kwargs):
+        """
+        Prepare arguments and get them executed.
+
+        We might have multiple commands in kwargs['args'] as list within list
+        or as string with newlines.
+        """
+        return self._do_run(**kwargs)
+
+    # XXX: omit_sudo is set to True since using sudo can change the ownership
+    # of files which becomes problematic for following executions of
+    # vstart_runner.py.
+    def _do_run(self, args, check_status=True, wait=True, stdout=None,
+                stderr=None, cwd=None, stdin=None, logger=None, label=None,
+                env=None, timeout=None, omit_sudo=True, shell=True):
+        args = self._perform_checks(args, omit_sudo, shell)
 
         if shell:
             subproc = subprocess.Popen(quote(args),
