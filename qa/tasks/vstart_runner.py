@@ -273,6 +273,7 @@ class LocalRemote(RemoteShell):
         # NOTE: No need for calling RemoteSHell.__init__() since RemoteShell
         # object required for teuthology requires much more details than
         # LocalRemote's object would require.
+        super().__init__()
         self.name = "local"
         self._hostname = "localhost"
         self.user = getpass.getuser()
