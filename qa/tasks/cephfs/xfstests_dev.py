@@ -1,7 +1,14 @@
 from io import StringIO
 from logging import getLogger
 
+from os import getcwd as os_getcwd
+from os.path import join
+from textwrap import dedent
+
 from tasks.cephfs.cephfs_test_case import CephFSTestCase
+from tasks.vstart_runner import LocalFuseMount
+from tasks.cephfs.fuse_mount import FuseMount
+from tasks.cephfs.kernel_mount import KernelMount
 
 
 logger = getLogger(__name__)
@@ -10,9 +17,6 @@ logger = getLogger(__name__)
 # TODO: add code to run non-ACL tests too.
 # TODO: get tests running with SCRATCH_DEV and SCRATCH_DIR.
 # TODO: make xfstests-dev tests running without running `make install`.
-# TODO: make xfstests-dev compatible with ceph-fuse. xfstests-dev remounts
-# CephFS before running tests using kernel, so ceph-fuse mounts are never
-# actually testsed.
 class XFSTestsDev(CephFSTestCase):
 
     def setUp(self):
@@ -65,8 +69,6 @@ class XFSTestsDev(CephFSTestCase):
             and "scratch" directories would be mounted. Look at xfstests-dev
             local.config's template inside this file to get some context.
         """
-        from os.path import join
-
         self.test_dirname = 'test'
         self.mount_a.run_shell(['mkdir', self.test_dirname])
         # read var name as "test dir's mount path"
@@ -133,25 +135,54 @@ class XFSTestsDev(CephFSTestCase):
                                        check_status=False)
 
     def write_local_config(self):
-        from os.path import join
-        from textwrap import dedent
+        if isinstance(self.mount_a, KernelMount):
+            conf_contents = self._gen_conf_for_kernel_mnt()
+        elif isinstance(self.mount_a, (FuseMount, LocalFuseMount)):
+            conf_contents = self._gen_conf_for_fuse_mnt()
 
+        self.mount_a.client_remote.write_file(join(self.repo_path,
+                                                   'local.config'),
+                                              conf_contents, sudo=True)
+
+    # generate local.config for kernel cephfs mounts
+    def _gen_conf_for_kernel_mnt(self):
         mon_sock = self.fs.mon_manager.get_msgrv1_mon_socks()[0]
-        self.test_dev = mon_sock + ':/' + self.test_dirname
-        self.scratch_dev = mon_sock + ':/' + self.scratch_dirname
+        test_dev = mon_sock + ':/' + self.test_dirname
+        scratch_dev = mon_sock + ':/' + self.scratch_dirname
 
-        xfstests_config_contents = dedent('''\
+        return dedent(f'''\
             export FSTYP=ceph
-            export TEST_DEV={}
-            export TEST_DIR={}
-            #export SCRATCH_DEV={}
-            #export SCRATCH_MNT={}
-            export TEST_FS_MOUNT_OPTS="-o name=admin,secret={}"
-            ''').format(self.test_dev, self.test_dirs_mount_path, self.scratch_dev,
-                        self.scratch_dirs_mount_path, self.get_admin_key())
+            export TEST_DEV={test_dev}
+            export TEST_DIR={self.test_dirs_mount_path}
+            export TEST_FS_MOUNT_OPTS="-o name=admin,secret={self.get_admin_key()}"
+            #export SCRATCH_DEV={scratch_dev}
+            #export SCRATCH_MNT={self.scratch_dirs_mount_path}''')
 
-        self.mount_a.client_remote.write_file(join(self.repo_path, 'local.config'),
-                                              xfstests_config_contents, sudo=True)
+    # generate local.config for FUSE cephfs mounts
+    def _gen_conf_for_fuse_mnt(self):
+        mon_sock = self.fs.mon_manager.get_msgrv1_mon_socks()[0]
+        test_dev = 'ceph-fuse'
+        scratch_dev = ''
+        # XXX: Please note that ceph_fuse_bin_path is not ideally required
+        # because ceph-fuse binary ought to be present in one of the standard
+        # locations during teuthology tests but then testing without
+        # vstart_runner.py will be messy since ceph-fuse binary won't be
+        # present in a standard locations during these sessions. Thus, this
+        # workaround.
+        ceph_fuse_bin_path = 'ceph-fuse' # bin expected to be in env
+        if type(self.mount_a) == 'LocalFuseMount': # for vstart_runner.py runs
+            ceph_fuse_bin_path = join(os_getcwd(), 'bin')
+        keyring_path = self.mount_a.client_remote.mktemp(
+            data=self.fs.mon_manager.get_keyring('client.admin'))
+
+        return dedent(f'''\
+            export FSTYP=ceph-fuse
+            export CEPH_FUSE_BIN_PATH={ceph_fuse_bin_path}
+            export TEST_DEV={test_dev}
+            export TEST_DIR={self.test_dirs_mount_path}
+            export TEST_FS_MOUNT_OPTS="-m {mon_sock} -k {keyring_path} --client_mountpoint {self.test_dirname}"
+            #export SCRATCH_DEV={scratch_dev}
+            #export SCRATCH_MNT={self.scratch_dirs_mount_path}''')
 
     def tearDown(self):
         self.mount_a.client_remote.run(args=['sudo', 'userdel', '--force',
