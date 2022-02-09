@@ -65,7 +65,11 @@ class FuseMount(CephFSMount):
 
         self._create_mntpt()
 
+        log.info(self.client_remote.run(args=f'sudo ls -la {self.hostfs_mntpt}',
+            stdout=StringIO()).stdout.getvalue())
         retval = self._run_mount_cmd(mntopts, check_status)
+        log.info(self.client_remote.run(args=f'sudo ls -la {self.hostfs_mntpt}',
+            stdout=StringIO()).stdout.getvalue())
         if retval:
             return retval
 

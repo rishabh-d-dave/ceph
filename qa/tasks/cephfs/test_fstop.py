@@ -25,3 +25,13 @@ class TestFSTop(CephFSTestCase):
                                 '--id=admin',
                                 '--selftest'])
         self.mgr_cluster.mon_manager.raw_cluster_cmd("mgr", "module", "disable", "stats")
+
+    def test_chmod_twice(self):
+        # Try to mount already mounted path
+        # expecting EBUSY error
+        try:
+            self.mount_a.mount_wait()
+        except CommandFailedError as e:
+            self.assertEqual(e.exitstatus, errno.EBUSY)
+        else:
+            self.fail("Expected EBUSY")
