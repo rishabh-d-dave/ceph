@@ -73,7 +73,6 @@ class FuseMount(CephFSMount):
 
     def _run_mount_cmd(self, mntopts, mntargs, check_status):
         mount_cmd = self._get_mount_cmd(mntopts, mntargs)
-        mountcmd_stdout, mountcmd_stderr = StringIO(), StringIO()
 
         # Before starting ceph-fuse process, note the contents of
         # /sys/fs/fuse/connections
@@ -85,13 +84,13 @@ class FuseMount(CephFSMount):
             cwd=self._mount_cmd_cwd,
             logger=self._mount_cmd_logger,
             stdin=self._mount_cmd_stdin,
-            stdout=mountcmd_stdout,
-            stderr=mountcmd_stderr,
+            stdout=StringIO(),
+            stderr=StringIO(),
             wait=False
         )
 
         return self._wait_and_record_our_fuse_conn(
-            check_status, pre_mount_conns, mountcmd_stdout, mountcmd_stderr)
+            check_status, pre_mount_conns)
 
     def _get_mount_cmd(self, mntopts, mntargs):
         daemon_signal = 'kill'
@@ -159,8 +158,7 @@ class FuseMount(CephFSMount):
         else:
             return []
 
-    def _wait_and_record_our_fuse_conn(self, check_status, pre_mount_conns,
-                                       mountcmd_stdout, mountcmd_stderr):
+    def _wait_and_record_our_fuse_conn(self, check_status, pre_mount_conns):
         """
         Wait for the connection reference to appear in /sys
         """
@@ -174,12 +172,17 @@ class FuseMount(CephFSMount):
                 try:
                     self.fuse_daemon.wait()
                 except CommandFailedError as e:
-                    log.info('mount command failed.')
+                    log.info('mount command failed. return value: '
+                             f'{self.fuse_daemon.returncode}')
+                    stdout = self.fuse_daemon.stdout.getvalue()
+                    stderr = self.fuse_daemon.stderr.getvalue()
                     if check_status:
+                        log.debug(f'stdout -\n{stdout}')
+                        log.debug(f'stderr -\n{stderr}')
                         raise
                     else:
-                        return (e, mountcmd_stdout.getvalue(),
-                                mountcmd_stderr.getvalue())
+                        return (e, stdout, stderr)
+
             time.sleep(1)
             waited += 1
             if waited > self._fuse_conn_check_timeout:

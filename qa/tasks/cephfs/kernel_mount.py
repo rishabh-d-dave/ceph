@@ -77,19 +77,20 @@ class KernelMount(CephFSMount):
 
     def _run_mount_cmd(self, mntopts, check_status):
         mount_cmd = self._get_mount_cmd(mntopts)
-        mountcmd_stdout, mountcmd_stderr = StringIO(), StringIO()
 
         try:
-            self.client_remote.run(args=mount_cmd, timeout=300,
-                                   stdout=mountcmd_stdout,
-                                   stderr=mountcmd_stderr, omit_sudo=False)
+            mount_proc = self.client_remote.run(args=mount_cmd, timeout=300,
+                stdout=StringIO(), stderr=StringIO(), omit_sudo=False)
         except CommandFailedError as e:
-            log.info('mount command failed')
+            log.info('mount command failed. return value: '
+                     f'{mount_proc.returncode}')
             if check_status:
+                log.debug(f'stdout -\n{mount_proc.stdout.getvalue()}')
+                log.debug(f'stderr -\n{mount_proc.stderr.getvalue()}')
                 raise
             else:
-                return (e, mountcmd_stdout.getvalue(),
-                        mountcmd_stderr.getvalue())
+                return (e, mount_proc.stdout.getvalue(),
+                        mount_proc.stderr.getvalue())
         log.info('mount command passed')
 
     def _make_mount_cmd_old_or_new_style(self):
