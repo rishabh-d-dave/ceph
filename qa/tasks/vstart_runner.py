@@ -360,6 +360,21 @@ class LocalRemote(object):
         """
         self.write_file(path, data, sudo=True, **kwargs)
 
+    def write_live_output(self, subproc):
+        while True:
+            so = subproc.stdout.readline()
+            se = subproc.stderr.readline()
+            if subproc.poll() is not None:
+                break
+            if so:
+                log.debug(so.decode().strip())
+            if se:
+                log.debug(se.decode().strip())
+        #for i in iter(subproc.stdout.readline, b''):
+        #    for j in iter(subproc.stderr.readline, b''):
+        #        log.debug(i.decode().strip())
+        #        log.debug(j.decode().strip())
+
     def _perform_checks_and_return_list_of_args(self, args, omit_sudo):
         # Since Python's shell simulation can only work when commands are
         # provided as a list of argumensts...
@@ -414,7 +429,8 @@ class LocalRemote(object):
     # vstart_runner.py.
     def _do_run(self, args, check_status=True, wait=True, stdout=None,
                 stderr=None, cwd=None, stdin=None, logger=None, label=None,
-                env=None, timeout=None, omit_sudo=True, shell=True):
+                env=None, timeout=None, omit_sudo=True, shell=True,
+                live_output=False):
         args = self._perform_checks_and_return_list_of_args(args, omit_sudo)
 
         # We have to use shell=True if any run.Raw was present, e.g. &&
@@ -444,6 +460,8 @@ class LocalRemote(object):
                                        cwd=cwd,
                                        env=env,
                                        shell=True)
+            if live_output:
+                self.write_live_output(subproc)
         else:
             # Sanity check that we've got a list of strings
             for arg in args:
@@ -458,6 +476,8 @@ class LocalRemote(object):
                                        stdin=subprocess.PIPE,
                                        cwd=cwd,
                                        env=env)
+            if live_output:
+                self.write_live_output(subproc)
 
         if stdin:
             # Hack: writing to stdin is not deadlock-safe, but it "always" works
@@ -1091,7 +1111,8 @@ class LogRotate():
 
 def teardown_cluster():
     log.info('\ntearing down the cluster...')
-    remote.run(args=[os.path.join(SRC_PREFIX, "stop.sh")], timeout=60)
+    remote.run(args=[os.path.join(SRC_PREFIX, "stop.sh")], timeout=60,
+               live_output=True)
     log.info('\nceph cluster torn down')
     remote.run(args=['rm', '-rf', './dev', './out'])
 
@@ -1381,7 +1402,8 @@ def exec_test():
         log.info('\nrunning vstart.sh now...')
         # usually, i get vstart.sh running completely in less than 100
         # seconds.
-        remote.run(args=args, env=vstart_env, timeout=(3 * 60))
+        remote.run(args=args, env=vstart_env, timeout=(3 * 60),
+                   live_output=True)
         log.info('\nvstart.sh finished running')
 
         # Wait for OSD to come up so that subsequent injectargs etc will
