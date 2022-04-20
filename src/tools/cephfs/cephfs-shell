@@ -455,6 +455,7 @@ class CephFSShell(Cmd):
         """
         Global error catcher
         """
+        print(f'@@@@@@@@@@@@@@@@onecmd line - "{line}"')
         try:
             res = Cmd.onecmd(self, line, **kwargs)
             if self.interactive:
@@ -1658,20 +1659,21 @@ def execute_cmds_and_quit(args):
     if len(args.commands) <= 1:
         args.commands = args.commands[0].split(' ')
     for cmdarg in args.commands:
-        if ',' in cmdarg:
-            args_to_onecmd += ' ' + cmdarg[0:-1]
-            onecmd_retval = shell.onecmd(args_to_onecmd)
-            # if the current command failed, let's abort the execution of
-            # series of commands passed.
-            if onecmd_retval is not stop_exec_val:
-                return onecmd_retval
-            if shell.exit_code != 0:
-                return shell.exit_code
+        _cmdarg = cmdarg[0:-1] if ',' in cmdarg else cmdarg
+        args_to_onecmd += _cmdarg if args_to_onecmd == '' else ' ' + _cmdarg
 
-            args_to_onecmd = ''
+        if ',' not in cmdarg:
             continue
 
-        args_to_onecmd += ' ' + cmdarg
+        onecmd_retval = shell.onecmd(args_to_onecmd)
+        # if the current command failed, let's abort the execution of
+        # series of commands passed.
+        if onecmd_retval is not stop_exec_val:
+            return onecmd_retval
+        if shell.exit_code != 0:
+            return shell.exit_code
+
+        args_to_onecmd = ''
     return shell.onecmd(args_to_onecmd)
 
 
