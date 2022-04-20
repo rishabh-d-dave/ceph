@@ -159,6 +159,13 @@ class TestCephFSShell(CephFSTestCase):
             check_status=check_status).stdout.getvalue().strip())
 
 
+class TestGeneric(TestCephFSShell):
+
+    def test_mistyped_cmd(self):
+        with self.assertRaises(CommandFailedError):
+            self.run_cephfs_shell_cmd('lsx')
+
+
 class TestMkdir(TestCephFSShell):
     def test_mkdir(self):
         """

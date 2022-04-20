@@ -95,6 +95,7 @@ def poutput(s, end='\n'):
 
 def perror(msg, **kwargs):
     shell.perror(msg, **kwargs)
+    shell.exit_code = 127
 
 
 def set_exit_code_msg(errcode='Misc', msg=''):
