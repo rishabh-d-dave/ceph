@@ -245,7 +245,8 @@ class LocalRemoteProcess(object):
             # give you stick about std* already being closed
             if self.check_status and self.exitstatus != 0:
                 # TODO: print self.args or self.usr_args in exception msg?
-                raise CommandFailedError(self.args, self.exitstatus)
+                raise CommandFailedError(self.args, self.exitstatus,
+                    stdout=self.stdout, stderr=self.stderr, log=log)
             else:
                 return
 
@@ -262,7 +263,8 @@ class LocalRemoteProcess(object):
 
         if self.check_status and self.exitstatus != 0:
             # TODO: print self.args or self.usr_args in exception msg?
-            raise CommandFailedError(self.args, self.exitstatus)
+            raise CommandFailedError(self.args, self.exitstatus,
+                stdout=self.stdout, stderr=self.stderr, log=log)
 
     @property
     def finished(self):
@@ -1252,9 +1254,14 @@ def launch_individually(overall_suite):
 def launch_entire_suite(overall_suite):
     LoggingResult = get_logging_result_class()
 
-    testrunner = unittest.TextTestRunner(stream=LogStream(),
-                                         resultclass=LoggingResult,
-                                         verbosity=2, failfast=True)
+    try:
+        testrunner = unittest.TextTestRunner(stream=LogStream(),
+                                             resultclass=LoggingResult,
+                                             verbosity=2, failfast=True)
+    except CommandFailedError as e:
+        e.log_failed_cmd()
+        raise
+
     return testrunner.run(overall_suite)
 
 
@@ -1505,7 +1512,13 @@ def exec_test():
         s._tests.remove(method)
 
     overall_suite = load_tests(modules, loader.TestLoader())
-    result = launch_tests(overall_suite)
+    # if CommandFailedError wasn't caught so far, most likely it was
+    # unexpectedly raised.
+    try:
+        result = launch_tests(overall_suite)
+    except CommandFailedError as e:
+        e.log_failed_cmd()
+        raise
 
     CephFSMount.cleanup_stale_netnses_and_bridge(remote)
     if opt_teardown_cluster:

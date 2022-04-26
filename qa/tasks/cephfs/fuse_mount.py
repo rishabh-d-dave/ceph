@@ -172,13 +172,7 @@ class FuseMount(CephFSMount):
                 try:
                     self.fuse_daemon.wait()
                 except CommandFailedError as e:
-                    log.info('mount command failed. return value: '
-                             f'{self.fuse_daemon.returncode}')
-                    stdout = self.fuse_daemon.stdout.getvalue()
-                    stderr = self.fuse_daemon.stderr.getvalue()
                     if check_status:
-                        log.debug(f'stdout -\n{stdout}')
-                        log.debug(f'stderr -\n{stderr}')
                         raise
                     else:
                         return (e, stdout, stderr)
