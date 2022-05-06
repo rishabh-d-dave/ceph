@@ -253,11 +253,11 @@ class TestVolumesHelper(CephFSTestCase):
         subvolpath = self._get_subvolume_path(self.volname, subvolume, group_name=subvolume_group)
 
         # mode
-        self.mount_a.run_shell(['chmod', mode, subvolpath], sudo=True)
+        self.mount_a.run_shell(['chmod', mode, subvolpath], omit_sudo=True)
 
         # ownership
-        self.mount_a.run_shell(['chown', uid, subvolpath], sudo=True)
-        self.mount_a.run_shell(['chgrp', gid, subvolpath], sudo=True)
+        self.mount_a.run_shell(['chown', uid, subvolpath], omit_sudo=True)
+        self.mount_a.run_shell(['chgrp', gid, subvolpath], omit_sudo=True)
 
     def _do_subvolume_io(self, subvolume, subvolume_group=None, create_dir=None,
                          number_of_files=DEFAULT_NUMBER_OF_FILES, file_size=DEFAULT_FILE_SIZE):
@@ -293,7 +293,7 @@ class TestVolumesHelper(CephFSTestCase):
         self.mount_a.run_shell(["ln", "-s", "./{}".format(reg_file), sym_path1])
         self.mount_a.run_shell(["ln", "-s", "./{}".format(reg_file), sym_path2])
         # flip ownership to nobody. assumption: nobody's id is 65534
-        self.mount_a.run_shell(["chown", "-h", "65534:65534", sym_path2], sudo=True, omit_sudo=False)
+        self.mount_a.run_shell(["chown", "-h", "65534:65534", sym_path2], omit_sudo=False)
 
     def _wait_for_trash_empty(self, timeout=30):
         # XXX: construct the trash dir path (note that there is no mgr
@@ -312,7 +312,7 @@ class TestVolumesHelper(CephFSTestCase):
             group = subvol_group if subvol_group is not None else '_nogroup'
             metapath = os.path.join(".", "volumes", group, subvol_name, ".meta")
 
-        out = self.mount_a.run_shell(['cat', metapath], sudo=True)
+        out = self.mount_a.run_shell(['cat', metapath], omit_sudo=True)
         lines = out.stdout.getvalue().strip().split('\n')
         sv_version = -1
         for line in lines:
@@ -327,12 +327,12 @@ class TestVolumesHelper(CephFSTestCase):
         basepath = os.path.join("volumes", group, subvol_name)
         uuid_str = str(uuid.uuid4())
         createpath = os.path.join(basepath, uuid_str)
-        self.mount_a.run_shell(['mkdir', '-p', createpath], sudo=True)
+        self.mount_a.run_shell(['mkdir', '-p', createpath], omit_sudo=True)
 
         # create a v1 snapshot, to prevent auto upgrades
         if has_snapshot:
             snappath = os.path.join(createpath, ".snap", "fake")
-            self.mount_a.run_shell(['mkdir', '-p', snappath], sudo=True)
+            self.mount_a.run_shell(['mkdir', '-p', snappath], omit_sudo=True)
 
         # add required xattrs to subvolume
         default_pool = self.mount_a.getfattr(".", "ceph.dir.layout.pool")
@@ -351,9 +351,9 @@ class TestVolumesHelper(CephFSTestCase):
         group = subvol_group if subvol_group is not None else '_nogroup'
         trashpath = os.path.join("volumes", group, subvol_name, '.trash', trash_name)
         if create:
-            self.mount_a.run_shell(['mkdir', '-p', trashpath], sudo=True)
+            self.mount_a.run_shell(['mkdir', '-p', trashpath], omit_sudo=True)
         else:
-            self.mount_a.run_shell(['rmdir', trashpath], sudo=True)
+            self.mount_a.run_shell(['rmdir', trashpath], omit_sudo=True)
 
     def _configure_guest_auth(self, guest_mount, authid, key):
         """
@@ -1394,7 +1394,7 @@ class TestSubvolumes(TestVolumesHelper):
 
         # emulate a old-fashioned subvolume in a custom group
         createpath = os.path.join(".", "volumes", group, subvolume)
-        self.mount_a.run_shell(['mkdir', '-p', createpath], sudo=True)
+        self.mount_a.run_shell(['mkdir', '-p', createpath], omit_sudo=True)
 
         # add required xattrs to subvolume
         default_pool = self.mount_a.getfattr(".", "ceph.dir.layout.pool")
@@ -1828,7 +1828,7 @@ class TestSubvolumes(TestVolumesHelper):
 
         # Induce partial auth update state by modifying the auth metadata file,
         # and then run authorize again.
-        guest_mount.run_shell(['sed', '-i', 's/false/true/g', 'volumes/{0}'.format(auth_metadata_filename)], sudo=True)
+        guest_mount.run_shell(['sed', '-i', 's/false/true/g', 'volumes/{0}'.format(auth_metadata_filename)], omit_sudo=True)
 
         # Authorize 'guestclient_1' to access the subvolume.
         self._fs_cmd("subvolume", "authorize", self.volname, subvolume, guestclient_1["auth_id"],
@@ -1884,7 +1884,7 @@ class TestSubvolumes(TestVolumesHelper):
 
         # Induce partial auth update state by modifying the auth metadata file,
         # and then run de-authorize.
-        guest_mount.run_shell(['sed', '-i', 's/false/true/g', 'volumes/{0}'.format(auth_metadata_filename)], sudo=True)
+        guest_mount.run_shell(['sed', '-i', 's/false/true/g', 'volumes/{0}'.format(auth_metadata_filename)], omit_sudo=True)
 
         # Deauthorize 'guestclient_1' to access the subvolume2.
         self._fs_cmd("subvolume", "deauthorize", self.volname, subvolume2, guestclient_1["auth_id"],
@@ -1937,7 +1937,7 @@ class TestSubvolumes(TestVolumesHelper):
         self.assertIn(auth_metadata_filename, guest_mount.ls("volumes"))
 
         # Replace 'subvolumes' to 'volumes', old style auth-metadata file
-        guest_mount.run_shell(['sed', '-i', 's/subvolumes/volumes/g', 'volumes/{0}'.format(auth_metadata_filename)], sudo=True)
+        guest_mount.run_shell(['sed', '-i', 's/subvolumes/volumes/g', 'volumes/{0}'.format(auth_metadata_filename)], omit_sudo=True)
 
         # Authorize 'guestclient_1' to access the subvolume2. This should transparently update 'volumes' to 'subvolumes'
         self._fs_cmd("subvolume", "authorize", self.volname, subvolume2, guestclient_1["auth_id"],
@@ -2015,7 +2015,7 @@ class TestSubvolumes(TestVolumesHelper):
         self.assertIn(auth_metadata_filename, guest_mount.ls("volumes"))
 
         # Replace 'subvolumes' to 'volumes', old style auth-metadata file
-        guest_mount.run_shell(['sed', '-i', 's/subvolumes/volumes/g', 'volumes/{0}'.format(auth_metadata_filename)], sudo=True)
+        guest_mount.run_shell(['sed', '-i', 's/subvolumes/volumes/g', 'volumes/{0}'.format(auth_metadata_filename)], omit_sudo=True)
 
         # Deauthorize 'guestclient_1' to access the subvolume2. This should update 'volumes' to subvolumes'
         self._fs_cmd("subvolume", "deauthorize", self.volname, subvolume2, auth_id, "--group_name", group)
@@ -3313,13 +3313,13 @@ class TestSubvolumeSnapshots(TestVolumesHelper):
         # Create snapshot at ancestral level
         ancestral_snappath1 = os.path.join(".", "volumes", group, ".snap", "ancestral_snap_1")
         ancestral_snappath2 = os.path.join(".", "volumes", group, ".snap", "ancestral_snap_2")
-        self.mount_a.run_shell(['mkdir', '-p', ancestral_snappath1, ancestral_snappath2], sudo=True)
+        self.mount_a.run_shell(['mkdir', '-p', ancestral_snappath1, ancestral_snappath2], omit_sudo=True)
 
         subvolsnapshotls = json.loads(self._fs_cmd('subvolume', 'snapshot', 'ls', self.volname, subvolume, group))
         self.assertEqual(len(subvolsnapshotls), snap_count)
 
         # remove ancestral snapshots
-        self.mount_a.run_shell(['rmdir', ancestral_snappath1, ancestral_snappath2], sudo=True)
+        self.mount_a.run_shell(['rmdir', ancestral_snappath1, ancestral_snappath2], omit_sudo=True)
 
         # remove snapshot
         for snapshot in snapshots:
@@ -3353,7 +3353,7 @@ class TestSubvolumeSnapshots(TestVolumesHelper):
         # Create snapshot at ancestral level
         ancestral_snap_name = "ancestral_snap_1"
         ancestral_snappath1 = os.path.join(".", "volumes", group, ".snap", ancestral_snap_name)
-        self.mount_a.run_shell(['mkdir', '-p', ancestral_snappath1], sudo=True)
+        self.mount_a.run_shell(['mkdir', '-p', ancestral_snappath1], omit_sudo=True)
 
         # Validate existence of inherited snapshot
         group_path = os.path.join(".", "volumes", group)
@@ -3371,7 +3371,7 @@ class TestSubvolumeSnapshots(TestVolumesHelper):
             self.fail("expected snapshot info of inherited snapshot to fail")
 
         # remove ancestral snapshots
-        self.mount_a.run_shell(['rmdir', ancestral_snappath1], sudo=True)
+        self.mount_a.run_shell(['rmdir', ancestral_snappath1], omit_sudo=True)
 
         # remove subvolume
         self._fs_cmd("subvolume", "rm", self.volname, subvolume, "--group_name", group)
@@ -3401,7 +3401,7 @@ class TestSubvolumeSnapshots(TestVolumesHelper):
         # Create snapshot at ancestral level
         ancestral_snap_name = "ancestral_snap_1"
         ancestral_snappath1 = os.path.join(".", "volumes", group, ".snap", ancestral_snap_name)
-        self.mount_a.run_shell(['mkdir', '-p', ancestral_snappath1], sudo=True)
+        self.mount_a.run_shell(['mkdir', '-p', ancestral_snappath1], omit_sudo=True)
 
         # Validate existence of inherited snap
         group_path = os.path.join(".", "volumes", group)
@@ -3419,7 +3419,7 @@ class TestSubvolumeSnapshots(TestVolumesHelper):
             self.fail("expected removing inheirted snapshot to fail")
 
         # remove ancestral snapshots
-        self.mount_a.run_shell(['rmdir', ancestral_snappath1], sudo=True)
+        self.mount_a.run_shell(['rmdir', ancestral_snappath1], omit_sudo=True)
 
         # remove subvolume
         self._fs_cmd("subvolume", "rm", self.volname, subvolume, group)
@@ -3449,7 +3449,7 @@ class TestSubvolumeSnapshots(TestVolumesHelper):
 
         # Create subvolumegroup snapshot
         group_snapshot_path = os.path.join(".", "volumes", group, ".snap", group_snapshot)
-        self.mount_a.run_shell(['mkdir', '-p', group_snapshot_path], sudo=True)
+        self.mount_a.run_shell(['mkdir', '-p', group_snapshot_path], omit_sudo=True)
 
         # Validate existence of subvolumegroup snapshot
         self.mount_a.run_shell(['ls', group_snapshot_path])
@@ -3463,7 +3463,7 @@ class TestSubvolumeSnapshots(TestVolumesHelper):
             self.fail("expected subvolume snapshot creation with same name as subvolumegroup snapshot to fail")
 
         # remove subvolumegroup snapshot
-        self.mount_a.run_shell(['rmdir', group_snapshot_path], sudo=True)
+        self.mount_a.run_shell(['rmdir', group_snapshot_path], omit_sudo=True)
 
         # remove subvolume
         self._fs_cmd("subvolume", "rm", self.volname, subvolume, group)
@@ -5253,7 +5253,7 @@ class TestSubvolumeSnapshotClones(TestVolumesHelper):
 
         # emulate a old-fashioned subvolume
         createpath = os.path.join(".", "volumes", "_nogroup", subvolume)
-        self.mount_a.run_shell_payload(f"mkdir -p -m 777 {createpath}", sudo=True)
+        self.mount_a.run_shell_payload(f"mkdir -p -m 777 {createpath}", omit_sudo=True)
 
         # add required xattrs to subvolume
         default_pool = self.mount_a.getfattr(".", "ceph.dir.layout.pool")
@@ -5516,11 +5516,11 @@ class TestMisc(TestVolumesHelper):
         # emulate a old-fashioned subvolume -- one in the default group and
         # the other in a custom group
         createpath1 = os.path.join(".", "volumes", "_nogroup", subvolume1)
-        self.mount_a.run_shell(['mkdir', '-p', createpath1], sudo=True)
+        self.mount_a.run_shell(['mkdir', '-p', createpath1], omit_sudo=True)
 
         # create group
         createpath2 = os.path.join(".", "volumes", group, subvolume2)
-        self.mount_a.run_shell(['mkdir', '-p', createpath2], sudo=True)
+        self.mount_a.run_shell(['mkdir', '-p', createpath2], omit_sudo=True)
 
         # this would auto-upgrade on access without anyone noticing
         subvolpath1 = self._fs_cmd("subvolume", "getpath", self.volname, subvolume1)

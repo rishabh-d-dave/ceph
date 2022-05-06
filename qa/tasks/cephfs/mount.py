@@ -702,7 +702,6 @@ class CephFSMount(object):
 
     def run_shell(self, args, timeout=300, **kwargs):
         kwargs.pop('omit_sudo', False)
-        sudo = kwargs.pop('sudo', False)
         cwd = kwargs.pop('cwd', self.mountpoint)
         stdout = kwargs.pop('stdout', StringIO())
         stderr = kwargs.pop('stderr', StringIO())
