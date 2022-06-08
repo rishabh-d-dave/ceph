@@ -207,5 +207,13 @@ class XFSTestsDev(CephFSTestCase):
             export CEPHFS_MOUNT_OPTIONS="-o name=admin,secret={self.get_admin_key()}"
             ''')
 
-       self.mount_a.client_remote.write_file(join(self.xfstests_repo_path, 'local.config'),
-                                             xfstests_config_contents, sudo=True)
+        config_path = join(self.xfstests_repo_path, 'local.config')
+        self.mount_a.client_remote.write_file(config_path,
+                                              xfstests_config_contents, sudo=True)
+
+        # Variable xfstests_config_contents can be used to log the contents of
+        # local.config. But that is deliberately being avoided to use
+        # read_file() instead. This makes sure that the actual (and not
+        # supposed) contents of local.config is being logged.
+        contents = self.mount_a.client_remote.read_file(config_path).decode()
+        log.info(f'local.config\'s contents -\n{contents}')
