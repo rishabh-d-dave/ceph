@@ -128,7 +128,7 @@ class KernelMount(CephFSMount):
         return mount_cmd
 
     def umount(self, force=False):
-        if not self.is_mounted():
+        if not self.is_mounted() or self.is_stuck():
             self.cleanup()
             return
 
@@ -173,11 +173,7 @@ class KernelMount(CephFSMount):
                 raise
 
             # force delete the netns and umount
-            log.debug('Force/lazy unmounting on client.{id}...'.format(id=self.client_id))
-            self.client_remote.run(args=['sudo', 'umount', '-f', '-l',
-                                         self.mountpoint], timeout=timeout,
-                                   omit_sudo=False)
-
+            self._run_umount_lf()
             self.mounted = False
             self.cleanup()
 

@@ -169,6 +169,25 @@ class CephFSMount(object):
                      get_file(self.client_remote, self.client_keyring_path,
                               sudo=True).decode())
 
+    def is_stuck(self):
+        """
+        Check if mount is stuck/in a hanged state.
+        """
+        if not self.is_mounted():
+            return None
+
+        retval = self.client_remote.run(
+            # "timeout 10s" should make sure that findmnt never hangs.
+            args=f'sudo timeout -s kill 10s sudo ls {self.hostfs_mntpt}',
+            check_status=False, omit_sudo=False).returncode
+
+        log.info(f'last findmnt command\'s return value is - {retval}')
+
+        # 137 is what timeout cmd returns when it has to kill passed cmd.
+        if retval == 137:
+            return True
+        return False
+
     def is_mounted(self):
         return self.mounted
 
@@ -452,6 +471,19 @@ class CephFSMount(object):
         """
         self.mount(**kwargs)
         self.wait_until_mounted()
+
+    def _run_umount_lf(self):
+        log.debug(f'Force/lazy unmounting on client.{self.client_id}')
+
+        try:
+            proc = self.client_remote.run(
+                args=f'sudo umount --lazy --force {self.hostfs_mntpt}',
+                timeout=UMOUNT_TIMEOUT, omit_sudo=False)
+        except CommandFailedError:
+            if self.is_mounted():
+                raise
+
+        return proc
 
     def umount(self):
         raise NotImplementedError()

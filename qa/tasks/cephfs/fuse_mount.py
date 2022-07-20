@@ -312,7 +312,9 @@ class FuseMount(CephFSMount):
         umount() must not run cleanup() when it's called by umount_wait()
         since "run.wait([self.fuse_daemon], timeout)" would hang otherwise.
         """
-        if not self.is_mounted():
+        if not self.is_mounted() or self.is_stuck():
+            if self.is_stuck():
+                self._run_umount_lf()
             if cleanup:
                 self.cleanup()
             return
@@ -348,15 +350,8 @@ class FuseMount(CephFSMount):
                     """).format(self._fuse_conn))
                     self._fuse_conn = None
 
-                stderr = StringIO()
                 # make sure its unmounted
-                try:
-                    self.client_remote.run(
-                        args=['sudo', 'umount', '-l', '-f', self.hostfs_mntpt],
-                        stderr=stderr, timeout=UMOUNT_TIMEOUT, omit_sudo=False)
-                except CommandFailedError:
-                    if self.is_mounted():
-                        raise
+                self._run_umount_lf()
 
         self.mounted = False
         self._fuse_conn = None
