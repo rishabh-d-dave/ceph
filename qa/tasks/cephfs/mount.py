@@ -179,9 +179,10 @@ class CephFSMount(object):
         retval = self.client_remote.run(
             # "timeout 10s" should make sure that findmnt never hangs.
             args=f'sudo timeout -s kill 10s sudo ls {self.hostfs_mntpt}',
-            check_status=False, omit_sudo=False).returncode
-
+            check_status=False, omit_sudo=False, wait=False).returncode
         log.info(f'last findmnt command\'s return value is - {retval}')
+
+        self.client_remote.run(args='ps -efl', stdout=StringIO())
 
         # 137 is what timeout cmd returns when it has to kill passed cmd.
         if retval == 137:
