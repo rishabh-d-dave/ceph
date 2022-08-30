@@ -268,16 +268,14 @@ class TestClientLimits(CephFSTestCase):
             self.assertEqual(root_ino, 1);
 
         dir_path = os.path.join(self.mount_a.mountpoint, "testdir")
-
-        mkdir_script = dedent("""
-            import os
-            os.mkdir("{path}")
-            for n in range(0, {num_dirs}):
-                os.mkdir("{path}/dir{{0}}".format(n))
-            """)
-
         num_dirs = 1000
-        self.mount_a.run_python(mkdir_script.format(path=dir_path, num_dirs=num_dirs))
+        mkdir_script = dedent(f"""
+            import os
+            os.mkdir("{dir_path}")
+            for n in range(0, {num_dirs}):
+                os.mkdir("{dir_path}/dir{{0}}".format(n))
+            """)
+        self.mount_a.run_python(mkdir_script, sudo=True)
         self.mount_a.run_shell(["sync"])
 
         dentry_count, dentry_pinned_count = self.mount_a.get_dentry_count()
