@@ -273,7 +273,10 @@ class TestClientLimits(CephFSTestCase):
             import os
             os.mkdir("{dir_path}")
             for n in range(0, {num_dirs}):
-                os.mkdir("{dir_path}/dir{{0}}".format(n))
+                try:
+                    os.mkdir("{dir_path}/dir{{0}}".format(n))
+                except FileExistsError:
+                    pass
             """)
         self.mount_a.run_python(mkdir_script, sudo=True)
         self.mount_a.run_shell(["sync"])
