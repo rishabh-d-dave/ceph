@@ -272,10 +272,12 @@ class TestClientLimits(CephFSTestCase):
         mkdir_script = dedent(f"""
             import os
             os.mkdir("{dir_path}")
+            os.listdir('{dir_path}')
             for n in range(0, {num_dirs}):
                 try:
                     os.mkdir("{dir_path}/dir{{0}}".format(n))
                 except FileExistsError:
+                    os.listdir('{dir_path}')
                     pass
             """)
         self.mount_a.run_python(mkdir_script, sudo=True)
