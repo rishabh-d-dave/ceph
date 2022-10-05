@@ -11,6 +11,8 @@ from tasks.cephfs.cephfs_test_case import CephFSTestCase, needs_trimming
 from tasks.cephfs.fuse_mount import FuseMount
 import os
 
+from teuthology.exceptions import CommandFailedError
+
 
 log = logging.getLogger(__name__)
 
@@ -280,7 +282,10 @@ class TestClientLimits(CephFSTestCase):
                     os.listdir('{dir_path}')
                     pass
             """)
-        self.mount_a.run_python(mkdir_script, sudo=True)
+        try:
+            self.mount_a.run_python(mkdir_script, sudo=True)
+        except CommandFailedError:
+            pass
         self.mount_a.run_shell(["sync"])
 
         dentry_count, dentry_pinned_count = self.mount_a.get_dentry_count()
