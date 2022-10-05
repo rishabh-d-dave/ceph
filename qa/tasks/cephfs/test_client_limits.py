@@ -271,10 +271,11 @@ class TestClientLimits(CephFSTestCase):
 
         dir_path = os.path.join(self.mount_a.mountpoint, "testdir")
         num_dirs = 1000
+        self.mount_a.run_python(dedent(f"""import os
+                                       os.mkdir("{dir_path}")"""), sudo=True)
+        self.mount_a.run_python(dedent(f"""import os
+                                       os.listdir('{dir_path}')"""), sudo=True)
         mkdir_script = dedent(f"""
-            import os
-            os.mkdir("{dir_path}")
-            os.listdir('{dir_path}')
             for n in range(0, {num_dirs}):
                 try:
                     os.mkdir("{dir_path}/dir{{0}}".format(n))
