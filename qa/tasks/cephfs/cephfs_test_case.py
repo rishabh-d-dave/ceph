@@ -49,7 +49,36 @@ class MountDetails():
         mntobj.hostfs_mntpt = self.hostfs_mntpt
 
 
-class CephFSTestCase(CephTestCase):
+class RunCephCmd:
+
+    cephman = None
+
+    def __init__(self):
+        if RunCephCmd.cephman is not None:
+            return RunCephCmd.cephman
+
+        str_class1 = str(type(self))
+        # if CephFSTestCase invoked this code
+        if hasattr(self, 'ceph_cluster'):
+            str_class2 = str(type(self.ceph_cluster))
+            admin_remote = self.ceph_cluster.admin_remote
+        # else MDSCluster invoked this code
+        else:
+            admin_remote = self.admin_remote
+
+        # if vstart_runner.py has invoked this code
+        if 'Local' in str_class1 or 'Local' in str_class2:
+            from tasks.vstart_runner import LocalCephManager
+            RunCephCmd.cephman = LocalCephManager(ctx=self.ctx)
+        # else teuthology has invoked this code
+        else:
+            from tasks.ceph_manager import CephManager
+            RunCephCmd.cephman = CephManager(
+                admin_remote, ctx=self.ctx,
+                logger=log.getChild('ceph_manager'))
+
+
+class CephFSTestCase(CephTestCase, RunCephCmd):
     """
     Test case for Ceph FS, requires caller to populate Filesystem and Mounts,
     into the fs, mount_a, mount_b class attributes (setting mount_b is optional)
@@ -109,6 +138,7 @@ class CephFSTestCase(CephTestCase):
 
     def setUp(self):
         super(CephFSTestCase, self).setUp()
+        RunCephCmd.__init__(self)
 
         self.config_set('mon', 'mon_allow_pool_delete', True)
 
