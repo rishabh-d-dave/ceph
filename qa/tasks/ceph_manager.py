@@ -1552,10 +1552,10 @@ class CephManager:
             else:
                 kwargs.pop('args', None)
 
-        args = shlex.split(cmd)
         stdout = kwargs.pop('stdout', StringIO())
         stderr = kwargs.pop('stderr', StringIO())
-        return self.run_cluster_cmd(args=args, stdout=stdout, stderr=stderr, **kwargs)
+        return self.run_cluster_cmd(args=cmd, stdout=stdout, stderr=stderr,
+                                    **kwargs)
 
     def run_cluster_cmd(self, **kwargs):
         """
