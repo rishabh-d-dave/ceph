@@ -1545,8 +1545,13 @@ class CephManager:
         """
         Simple Ceph admin command wrapper around run_cluster_cmd.
         """
+        if 'args' in kwargs:
+            if kwargs['args'] != cmd:
+                raise RuntimeError('Two distinct commands have been passed.'
+                                   'Don\'t pass a command in kwargs[\'args\']')
+            else:
+                kwargs.pop('args', None)
 
-        kwargs.pop('args', None)
         args = shlex.split(cmd)
         stdout = kwargs.pop('stdout', StringIO())
         stderr = kwargs.pop('stderr', StringIO())
