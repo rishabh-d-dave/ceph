@@ -1557,6 +1557,9 @@ class CephManager:
         return self.run_cluster_cmd(args=cmd, stdout=stdout, stderr=stderr,
                                     **kwargs)
 
+    def ceph_result(self, cmd, **kwargs):
+        return self.ceph(cmd, **kwargs).exitstatus
+
     def run_cluster_cmd(self, **kwargs):
         """
         Run a Ceph command and return the object representing the process
