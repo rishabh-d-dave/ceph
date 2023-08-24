@@ -378,10 +378,40 @@ class SubvolumeBase(object):
             log.info("subvolume path '{0}' "
                      "linked in trashcan bname {1}".format(path, bname))
 
-    def trash_base_dir(self):
+    def trash_base_dir(self, sync=False):
         if self.legacy_mode:
             self.fs.unlink(self.legacy_config_path)
         self._trash_dir(self.base_path)
+
+    def del_subvol_directly(self):
+        '''
+        Synchronously delete subvolume without moving it to trash.
+        '''
+        def rmtree(root_path):
+            log.debug("rmtree {0}".format(root_path))
+            try:
+                with self.fs.opendir(root_path) as dir_handle:
+                    dir_ = self.fs.readdir(dir_handle)
+                    while dir_:
+                        if dir_.d_name not in (b".", b".."):
+                            dir_full_path = os.path.join(root_path, dir_.d_name)
+                            if dir_.is_dir():
+                                rmtree(dir_full_path)
+                                self.fs.rmdir(dir_full_path)
+                            else:
+                                self.fs.unlink(dir_full_path)
+                        dir_ = self.fs.readdir(dir_handle)
+            except cephfs.ObjectNotFound:
+                return
+            except cephfs.Error as e:
+                raise VolumeException(-e.args[0], e.args[1])
+
+        # catch any unlink errors
+        try:
+            rmtree(self.base_path)
+            self.fs.rmdir(self.base_path)
+        except cephfs.Error as e:
+            raise VolumeException(-e.args[0], e.args[1])
 
     def create_base_dir(self, mode):
         try:

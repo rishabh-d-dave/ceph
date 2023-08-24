@@ -41,7 +41,8 @@ def create_clone(mgr, fs, vol_spec, group, subvolname, pool, source_volume, sour
     subvolume.create_clone(pool, source_volume, source_subvolume, snapname)
 
 
-def remove_subvol(mgr, fs, vol_spec, group, subvolname, force=False, retainsnaps=False):
+def remove_subvol(mgr, fs, vol_spec, group, subvolname, force=False,
+                  retainsnaps=False, sync=False):
     """
     remove a subvolume.
 
@@ -50,11 +51,12 @@ def remove_subvol(mgr, fs, vol_spec, group, subvolname, force=False, retainsnaps
     :param group: group object for the subvolume
     :param subvolname: subvolume name
     :param force: force remove subvolumes
+    :param sync: delete subvolume synchronously
     :return: None
     """
     op_type = SubvolumeOpType.REMOVE if not force else SubvolumeOpType.REMOVE_FORCE
     with open_subvol(mgr, fs, vol_spec, group, subvolname, op_type) as subvolume:
-        subvolume.remove(retainsnaps)
+        subvolume.remove(retainsnaps, sync)
 
 
 @contextmanager

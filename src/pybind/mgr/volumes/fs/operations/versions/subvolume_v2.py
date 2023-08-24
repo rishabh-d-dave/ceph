@@ -357,7 +357,7 @@ class SubvolumeV2(SubvolumeV1):
             return False
         return True
 
-    def remove(self, retainsnaps=False, internal_cleanup=False):
+    def remove(self, retainsnaps=False, sync=False, internal_cleanup=False):
         if self.list_snapshots():
             if not retainsnaps:
                 raise VolumeException(-errno.ENOTEMPTY, "subvolume '{0}' has snapshots".format(self.subvolname))
@@ -366,7 +366,10 @@ class SubvolumeV2(SubvolumeV1):
                 raise VolumeException(-errno.EAGAIN,
                                       "{0} clone in-progress -- please cancel the clone and retry".format(self.subvolname))
             if not self.has_pending_purges:
-                self.trash_base_dir()
+                if sync:
+                    self.del_subvol_directly()
+                else:
+                    self.trash_base_dir(sync)
                 # Delete the volume meta file, if it's not already deleted
                 self.auth_mdata_mgr.delete_subvolume_metadata_file(self.group.groupname, self.subvolname)
                 return
