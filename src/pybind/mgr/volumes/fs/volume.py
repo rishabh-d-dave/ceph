@@ -257,16 +257,19 @@ class VolumeClient(CephfsClient["Module"]):
         groupname   = kwargs['group_name']
         force       = kwargs['force']
         retainsnaps = kwargs['retain_snapshots']
+        sync        = kwargs['sync']
 
         try:
             with open_volume(self, volname) as fs_handle:
                 with open_group(fs_handle, self.volspec, groupname) as group:
-                    remove_subvol(self.mgr, fs_handle, self.volspec, group, subvolname, force, retainsnaps)
-                    # kick the purge threads for async removal -- note that this
-                    # assumes that the subvolume is moved to trash can.
-                    # TODO: make purge queue as singleton so that trash can kicks
-                    # the purge threads on dump.
-                    self.purge_queue.queue_job(volname)
+                    remove_subvol(self.mgr, fs_handle, self.volspec, group,
+                                  subvolname, force, retainsnaps, sync)
+                    if not sync:
+                        # kick the purge threads for async removal -- note that this
+                        # assumes that the subvolume is moved to trash can.
+                        # TODO: make purge queue as singleton so that trash can kicks
+                        # the purge threads on dump.
+                        self.purge_queue.queue_job(volname)
         except VolumeException as ve:
             if ve.errno == -errno.EAGAIN and not force:
                 ve = VolumeException(ve.errno, ve.error_str + " (use --force to override)")

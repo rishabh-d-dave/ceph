@@ -154,7 +154,8 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
                    'name=sub_name,type=CephString '
                    'name=group_name,type=CephString,req=false '
                    'name=force,type=CephBool,req=false '
-                   'name=retain_snapshots,type=CephBool,req=false ',
+                   'name=retain_snapshots,type=CephBool,req=false '
+                   'name=sync,type=CephBool,req=false ',
             'desc': "Delete a CephFS subvolume in a volume, and optionally, "
                     "in a specific subvolume group, force deleting a cancelled or failed "
                     "clone, and retaining existing subvolume snapshots",
@@ -634,7 +635,8 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
                                         sub_name=cmd['sub_name'],
                                         group_name=cmd.get('group_name', None),
                                         force=cmd.get('force', False),
-                                        retain_snapshots=cmd.get('retain_snapshots', False))
+                                        retain_snapshots=cmd.get('retain_snapshots', False),
+                                        sync=cmd.get('sync', False))
 
     @mgr_cmd_wrap
     def _cmd_fs_subvolume_authorize(self, inbuf, cmd):

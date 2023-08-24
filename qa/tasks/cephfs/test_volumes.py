@@ -3530,6 +3530,19 @@ class TestSubvolumes(TestVolumesHelper):
         except CommandFailedError:
             self.fail("expected the 'fs subvolume rm --force' command to succeed")
 
+    def test_subvolume_rm_sync(self):
+        '''
+        Test that subvolume are deleted synchronously when --sync flag is
+        passed.
+        '''
+        subvolume = self._generate_random_subvolume_name()
+        # TODO: add few large regfiles to subvol if not done above
+        try:
+            self._fs_cmd("subvolume", "rm", self.volname, subvolume, "--sync")
+        except CommandFailedError:
+            self.fail("expected the 'fs subvolume rm --force' command to succeed")
+        # TODO: ensure absence in trash dir
+
     def test_subvolume_exists_with_subvolumegroup_and_subvolume(self):
         """Test the presence of any subvolume by specifying the name of subvolumegroup"""
 
