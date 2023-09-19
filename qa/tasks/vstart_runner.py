@@ -909,7 +909,7 @@ class LocalMDSCluster(LocalCephCluster, MDSCluster):
         # FIXME: unimplemented
         pass
 
-    def newfs(self, name='cephfs', create=True):
+    def newfs(self, name='testcephfs1', create=True):
         return LocalFilesystem(self._ctx, name=name, create=create)
 
     def delete_all_filesystems(self):
