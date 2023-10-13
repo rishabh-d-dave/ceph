@@ -742,7 +742,7 @@ class TestRenameCommand(TestAdminCommands):
         """
         That renaming a file system fails if the new name refers to an existing file system.
         """
-        self.fs2 = self.mds_cluster.newfs(name='cephfs2', create=True)
+        self.fs2 = self.mds_cluster.newfs(name='testcephfs2', create=True)
 
         try:
             self.run_ceph_cmd(f"fs rename {self.fs.name} {self.fs2.name} --yes-i-really-mean-it")
@@ -1028,7 +1028,7 @@ class TestCompatCommands(CephFSTestCase):
         Like test_standby_incompat_reject but with a second fs.
         """
 
-        fs2 = self.mds_cluster.newfs(name="cephfs2", create=True)
+        fs2 = self.mds_cluster.newfs(name="testcephfs2", create=True)
         fs2.fail()
         fs2.add_incompat(63, 'placeholder')
         fs2.set_joinable()
@@ -1301,7 +1301,7 @@ class TestFsAuthorize(CephFSTestCase):
         """
         self.mount_a.umount_wait(require_clean=True)
         self.mds_cluster.delete_all_filesystems()
-        fs_name = "cephfs-_."
+        fs_name = "testcephfs-_."
         self.fs = self.mds_cluster.newfs(name=fs_name)
         self.fs.wait_for_daemons()
         self.run_ceph_cmd(f'auth caps client.{self.mount_a.client_id} '
