@@ -1213,6 +1213,13 @@ class RenameFilesystemHandler : public FileSystemCommandHandler
       return -EINVAL;
     }
 
+    // Check that no MDS daemons is up for this CephFS.
+    if (fsp->get_mds_map().get_num_up_mds() > 0) {
+      ss << "All MDSs for an FS must be down before renaming the file "
+	 << "system. See `ceph fs fail`.";
+      return -EPERM;
+    }
+
     if (fsp->get_mirror_info().mirrored) {
       ss << "Mirroring is enabled on file system '"<< fs_name << "'. Disable mirroring on the "
         "file system after ensuring it's OK to do so, and then retry to rename.";
