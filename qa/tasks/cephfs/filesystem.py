@@ -389,7 +389,7 @@ class MDSCluster(CephCluster):
     def mds_is_running(self, mds_id):
         return self.mds_daemons[mds_id].running()
 
-    def newfs(self, name='cephfs', create=True):
+    def newfs(self, name='testcephfs1', create=True):
         return Filesystem(self._ctx, name=name, create=create)
 
     def status(self, epoch=None):
@@ -664,7 +664,7 @@ class Filesystem(MDSCluster):
 
     def create(self, recover=False, metadata_overlay=False):
         if self.name is None:
-            self.name = "cephfs"
+            self.name = "testcephfs1"
         if self.metadata_pool_name is None:
             self.metadata_pool_name = "{0}_metadata".format(self.name)
         if self.data_pool_name is None:

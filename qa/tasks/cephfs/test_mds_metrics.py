@@ -505,7 +505,7 @@ class TestMDSMetrics(CephFSTestCase):
             "true", "--yes-i-really-mean-it")
 
         # creating filesystem
-        fs_a = self._setup_fs(fs_name="fs1")
+        fs_a = self._setup_fs(fs_name="testcephfs1")
 
         # Mount a client on fs_a
         self.mount_a.mount_wait(cephfs_name=fs_a.name)
@@ -515,7 +515,7 @@ class TestMDSMetrics(CephFSTestCase):
         self.mount_a.create_files()
 
         # creating another filesystem
-        fs_b = self._setup_fs(fs_name="fs2")
+        fs_b = self._setup_fs(fs_name="testcephfs2")
 
         # Mount a client on fs_b
         self.mount_b.mount_wait(cephfs_name=fs_b.name)
@@ -573,7 +573,7 @@ class TestMDSMetrics(CephFSTestCase):
             "true", "--yes-i-really-mean-it")
 
         # creating filesystem
-        fs_b = self._setup_fs(fs_name="fs2")
+        fs_b = self._setup_fs(fs_name="testcephfs2")
 
         # Mount a client on fs_b
         self.mount_b.mount_wait(cephfs_name=fs_b.name)
@@ -582,7 +582,7 @@ class TestMDSMetrics(CephFSTestCase):
         self.mount_b.create_files()
 
         # creating another filesystem
-        fs_a = self._setup_fs(fs_name="fs1")
+        fs_a = self._setup_fs(fs_name="testcephfs1")
 
         # Mount a client on fs_a
         self.mount_a.mount_wait(cephfs_name=fs_a.name)
