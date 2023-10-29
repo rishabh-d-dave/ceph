@@ -2,6 +2,7 @@ import errno
 import logging
 import os
 import stat
+from threading import Event
 
 import cephfs
 
@@ -36,7 +37,8 @@ def get_trash_entry_for_volume(fs_client, volspec, volname, running_jobs):
         return ve.errno, None
 
 
-def subvolume_purge(fs_client, volspec, volname, trashcan, subvolume_trash_entry, should_cancel):
+def subvolume_purge(fs_client, volspec, volname, trashcan, subvolume_trash_entry, should_cancel,
+                    should_purge):
     groupname, subvolname = resolve_trash(volspec, subvolume_trash_entry.decode('utf-8'))
     log.debug("subvolume resolved to {0}/{1}".format(groupname, subvolname))
 
@@ -50,14 +52,15 @@ def subvolume_purge(fs_client, volspec, volname, trashcan, subvolume_trash_entry
                     # this is fine under the global lock -- there are just a handful
                     # of entries in the subvolume to purge. moreover, the purge needs
                     # to be guarded since a create request might sneak in.
-                    trashcan.purge(subvolume.base_path, should_cancel)
+                    trashcan.purge(subvolume.base_path, should_cancel, should_purge)
     except VolumeException as ve:
         if not ve.errno == -errno.ENOENT:
             raise
 
 
 # helper for starting a purge operation on a trash entry
-def purge_trash_entry_for_volume(fs_client, volspec, volname, purge_entry, should_cancel):
+def purge_trash_entry_for_volume(fs_client, volspec, volname, purge_entry, should_cancel,
+                                 should_purge):
     log.debug("purging trash entry '{0}' for volume '{1}'".format(purge_entry, volname))
 
     ret = 0
@@ -74,19 +77,20 @@ def purge_trash_entry_for_volume(fs_client, volspec, volname, purge_entry, shoul
                         log.debug("purging entry pointing to subvolume trash: {0}".format(tgt))
                         delink = True
                         try:
-                            trashcan.purge(tgt, should_cancel)
+                            trashcan.purge(tgt, should_cancel, should_purge)
                         except VolumeException as ve:
                             if not ve.errno == -errno.ENOENT:
                                 delink = False
                                 return ve.errno
                         finally:
                             if delink:
-                                subvolume_purge(fs_client, volspec, volname, trashcan, tgt, should_cancel)
+                                subvolume_purge(fs_client, volspec, volname, trashcan, tgt,
+                                                should_cancel, should_purge)
                                 log.debug("purging trash link: {0}".format(purge_entry))
                                 trashcan.delink(purge_entry)
                     else:
                         log.debug("purging entry pointing to trash: {0}".format(pth))
-                        trashcan.purge(pth, should_cancel)
+                        trashcan.purge(pth, should_cancel, should_purge)
                 except cephfs.Error as e:
                     log.warn("failed to remove trash entry: {0}".format(e))
     except VolumeException as ve:
@@ -106,8 +110,29 @@ class ThreadPoolPurgeQueueMixin(AsyncJobs):
         self.vc = volume_client
         super(ThreadPoolPurgeQueueMixin, self).__init__(volume_client, "purgejob", tp_size)
 
+        # should_purge.set() causes purge threads to pause and should_purge.clear()
+        # causes purge threads to run.
+        self.should_purge = Event()
+        # let purge threads run by default.
+        self.should_purge.set()
+
+    def pause_purging(self):
+        """
+        Clear the flag in self.should_purge to pause all purging threads since
+        pause_puring_thread has been set by user.
+        """
+        self.should_purge.clear()
+
+    def resume_purging(self):
+        """
+        Set the flag in self.should_purge to pause all purging threads since
+        pause_puring_thread has been set by user.
+        """
+        self.should_purge.set()
+
     def get_next_job(self, volname, running_jobs):
         return get_trash_entry_for_volume(self.fs_client, self.vc.volspec, volname, running_jobs)
 
     def execute_job(self, volname, job, should_cancel):
-        purge_trash_entry_for_volume(self.fs_client, self.vc.volspec, volname, job, should_cancel)
+        purge_trash_entry_for_volume(self.fs_client, self.vc.volspec, volname,
+                                     job, should_cancel, self.should_purge)
