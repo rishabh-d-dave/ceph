@@ -489,7 +489,13 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
             'periodic_async_work',
             type='bool',
             default=False,
-            desc='Periodically check for async work')
+            desc='Periodically check for async work'),
+        Option(
+            'disable_purge_trash',
+            type='bool',
+            default=False,
+            desc='Enabling this config disables purging of subvolumes and '
+                 'also halts ongoing purges.')
     ]
 
     def __init__(self, *args, **kwargs):
@@ -498,6 +504,7 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
         self.max_concurrent_clones = None
         self.snapshot_clone_delay = None
         self.periodic_async_work = False
+        self.disable_purge_trash = False
         self.lock = threading.Lock()
         super(Module, self).__init__(*args, **kwargs)
         # Initialize config option members
@@ -532,6 +539,9 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
                         else:
                             self.vc.cloner.unset_wakeup_timeout()
                             self.vc.purge_queue.unset_wakeup_timeout()
+                    elif opt['name'] == "disable_purge_trash":
+                        self.vc.purge_queue.set_config_opt_disable_purge_trash(
+                            self.disable_purge_trash)
 
     def handle_command(self, inbuf, cmd):
         handler_name = "_cmd_" + cmd['prefix'].replace(" ", "_")

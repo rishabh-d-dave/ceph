@@ -57,7 +57,8 @@ def subvolume_purge(fs_client, volspec, volname, trashcan, subvolume_trash_entry
 
 
 # helper for starting a purge operation on a trash entry
-def purge_trash_entry_for_volume(fs_client, volspec, volname, purge_entry, should_cancel):
+def purge_trash_entry_for_volume(fs_client, volspec, volname, purge_entry,
+                                 should_purge, should_cancel):
     log.debug("purging trash entry '{0}' for volume '{1}'".format(purge_entry, volname))
 
     ret = 0
@@ -74,7 +75,7 @@ def purge_trash_entry_for_volume(fs_client, volspec, volname, purge_entry, shoul
                         log.debug("purging entry pointing to subvolume trash: {0}".format(tgt))
                         delink = True
                         try:
-                            trashcan.purge(tgt, should_cancel)
+                            trashcan.purge(tgt, should_purge, should_cancel)
                         except VolumeException as ve:
                             if not ve.errno == -errno.ENOENT:
                                 delink = False
@@ -86,7 +87,7 @@ def purge_trash_entry_for_volume(fs_client, volspec, volname, purge_entry, shoul
                                 trashcan.delink(purge_entry)
                     else:
                         log.debug("purging entry pointing to trash: {0}".format(pth))
-                        trashcan.purge(pth, should_cancel)
+                        trashcan.purge(pth, should_purge, should_cancel)
                 except cephfs.Error as e:
                     log.warn("failed to remove trash entry: {0}".format(e))
     except VolumeException as ve:
@@ -106,8 +107,19 @@ class ThreadPoolPurgeQueueMixin(AsyncJobs):
         self.vc = volume_client
         super(ThreadPoolPurgeQueueMixin, self).__init__(volume_client, "purgejob", tp_size)
 
+    def set_config_opt_disable_purge_trash(self, disable_purge_trash):
+        """
+        Set the value of the config option "disable_purge_trash" to the latest
+        value passed by the user. This allows not only stopping the purges in
+        the future but also allows halting ongoing purges midway.
+        """
+        self.fs_client.disable_purge_trash = disable_purge_trash
+
     def get_next_job(self, volname, running_jobs):
         return get_trash_entry_for_volume(self.fs_client, self.vc.volspec, volname, running_jobs)
 
     def execute_job(self, volname, job, should_cancel):
-        purge_trash_entry_for_volume(self.fs_client, self.vc.volspec, volname, job, should_cancel)
+        should_purge = lambda: not self.fs_client.disable_purge_trash
+
+        purge_trash_entry_for_volume(self.fs_client, self.vc.volspec, volname,
+                                     job, should_purge, should_cancel)
