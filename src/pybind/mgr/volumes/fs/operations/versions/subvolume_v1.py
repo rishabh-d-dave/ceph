@@ -6,7 +6,6 @@ import errno
 import logging
 import json
 from datetime import datetime
-from typing import Any, List, Dict
 from pathlib import Path
 
 import cephfs
@@ -55,7 +54,7 @@ class SubvolumeV1(SubvolumeBase, SubvolumeTemplate):
         try:
             # no need to stat the path -- open() does that
             return self.metadata_mgr.get_global_option(MetadataManager.GLOBAL_META_KEY_PATH).encode('utf-8')
-        except MetadataMgrException as me:
+        except MetadataMgrException:
             raise VolumeException(-errno.EINVAL, "error fetching subvolume metadata")
 
     @property
@@ -68,7 +67,7 @@ class SubvolumeV1(SubvolumeBase, SubvolumeTemplate):
         try:
             # MDS treats this as a noop for already marked subvolume
             self.fs.setxattr(self.path, 'ceph.dir.subvolume', b'1', 0)
-        except cephfs.InvalidValue as e:
+        except cephfs.InvalidValue:
             raise VolumeException(-errno.EINVAL, "invalid value specified for ceph.dir.subvolume")
         except cephfs.Error as e:
             raise VolumeException(-e.args[0], e.args[1])
@@ -89,7 +88,7 @@ class SubvolumeV1(SubvolumeBase, SubvolumeTemplate):
         subvolume_type = SubvolumeTypes.TYPE_NORMAL
         try:
             initial_state = SubvolumeOpSm.get_init_state(subvolume_type)
-        except OpSmException as oe:
+        except OpSmException:
             raise VolumeException(-errno.EINVAL, "subvolume creation failed: internal error")
 
         subvol_path = os.path.join(self.base_path, str(uuid.uuid4()).encode('utf-8'))
@@ -156,7 +155,7 @@ class SubvolumeV1(SubvolumeBase, SubvolumeTemplate):
         subvolume_type = SubvolumeTypes.TYPE_CLONE
         try:
             initial_state = SubvolumeOpSm.get_init_state(subvolume_type)
-        except OpSmException as oe:
+        except OpSmException:
             raise VolumeException(-errno.EINVAL, "clone failed: internal error")
 
         subvol_path = os.path.join(self.base_path, str(uuid.uuid4()).encode('utf-8'))
@@ -669,7 +668,7 @@ class SubvolumeV1(SubvolumeBase, SubvolumeTemplate):
                     pass
                 else:
                     raise
-        except MetadataMgrException as me:
+        except MetadataMgrException:
             raise VolumeException(-errno.EINVAL, "error fetching subvolume metadata")
         return clone_source
 
@@ -777,7 +776,6 @@ class SubvolumeV1(SubvolumeBase, SubvolumeTemplate):
                         # If clone is completed between 'list_all_keys_with_specified_values_from_section'
                         # and readlink(track_id_path) call then readlink will fail with error ENOENT (2)
                         # Hence we double check whether track_id is exist in .meta file or not.
-                        value = self.metadata_mgr.get_option('clone snaps', track_id)
                         # Edge case scenario.
                         # If track_id for clone exist but path /volumes/_index/clone/{track_id} not found
                         # then clone is orphan.

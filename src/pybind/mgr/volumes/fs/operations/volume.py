@@ -2,7 +2,7 @@ import errno
 import logging
 import os
 
-from typing import List, Tuple
+from typing import Tuple
 
 from contextlib import contextmanager
 

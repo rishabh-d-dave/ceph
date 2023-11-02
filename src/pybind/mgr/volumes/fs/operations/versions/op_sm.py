@@ -1,7 +1,5 @@
 import errno
 
-from typing import Dict
-
 from ...exception import OpSmException
 from .subvolume_attrs import SubvolumeTypes, SubvolumeStates, SubvolumeActions
 

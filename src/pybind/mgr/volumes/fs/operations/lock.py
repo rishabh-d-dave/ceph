@@ -1,7 +1,6 @@
 from contextlib import contextmanager
 import logging
 from threading import Lock
-from typing import Dict
 
 log = logging.getLogger(__name__)
 

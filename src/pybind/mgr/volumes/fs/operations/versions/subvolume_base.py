@@ -4,7 +4,6 @@ import stat
 import errno
 import logging
 import hashlib
-from typing import Dict, Union
 from pathlib import Path
 
 import cephfs
@@ -144,7 +143,7 @@ class SubvolumeBase(object):
         try:
             self.fs.stat(self.legacy_config_path)
             self.legacy_mode = True
-        except cephfs.Error as e:
+        except cephfs.Error:
             pass
 
         log.debug("loading config "

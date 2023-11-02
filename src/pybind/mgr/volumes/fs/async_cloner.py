@@ -4,7 +4,6 @@ import time
 import errno
 import logging
 from contextlib import contextmanager
-from typing import Optional
 
 import cephfs
 from mgr_util import lock_timeout_log
