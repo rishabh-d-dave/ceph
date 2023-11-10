@@ -622,7 +622,8 @@ class LocalCephFSMount():
         try:
             os.stat(keyring_path)
         except OSError:
-            return os.path.join(os.getcwd(), 'keyring')
+            return os.path.join(os.getcwd(),
+                                f'client.{self.client_id}.keyring')
         else:
             return keyring_path
 
