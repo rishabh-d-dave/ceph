@@ -90,7 +90,14 @@ def task(ctx, config):
         deep_merge(client_config, client_config_overrides)
         log.info(f"{entity} config is {client_config}")
 
-        cephfs_name = client_config.get("cephfs_name")
+        cephfs_name = client_config.get("cephfs_name", None)
+        log.info(f'msg 123 cephfs_name = {cephfs_name}')
+        if cephfs_name is None:
+            if (config.get('cephfs', None) is not None and
+                len(config.get('cephfs').get('fs')) == 1):
+                cephfs_name = config.get('cephfs').get('fs')[0]['name']
+                log.info(f'msg 123 cephfs_name = {cephfs_name}')
+
         if config.get("disabled", False) or not client_config.get('mounted', True):
             continue
 
@@ -102,6 +109,7 @@ def task(ctx, config):
             brxnet=ctx.teuthology_config.get('brxnet', None),
             client_config=client_config,
             cephfs_name=cephfs_name)
+        log.info(f'msg 123 kernel_mount.cephfs_name = {kernel_mount.cephfs_name}')
 
         mounts[id_] = kernel_mount
 
