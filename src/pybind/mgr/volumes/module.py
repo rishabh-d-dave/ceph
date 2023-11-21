@@ -161,6 +161,16 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
             'perm': 'rw'
         },
         {
+            'cmd': 'fs subvolume rm status'
+                   'name=vol_name,type=CephString '
+            'desc': 'CephFS subvolumes are deleted from CephFS volume in 2 '
+                    'stages: first (remove) move the subvolume to trash '
+                    'directory, & second (purge), delete it (asynchronously) '
+                    'from trash directory. This subcommand shows status of '
+                    'subvolume deleteions.'
+            'perm': 'rw'
+        },
+        {
             'cmd': 'fs subvolume authorize '
                    'name=vol_name,type=CephString '
                    'name=sub_name,type=CephString '
@@ -635,6 +645,13 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
                                         group_name=cmd.get('group_name', None),
                                         force=cmd.get('force', False),
                                         retain_snapshots=cmd.get('retain_snapshots', False))
+
+    @mgr_cmd_wrap
+    def _cmd_fs_subvolume_rm_status(self, inbuf, cmd):
+        """
+        :return: a 3-tuple of return code(int), empty string(str), error message (str)
+        """
+        return self.vc.subvolume_rm_status(vol_name=cmd['vol_name'])
 
     @mgr_cmd_wrap
     def _cmd_fs_subvolume_authorize(self, inbuf, cmd):

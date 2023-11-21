@@ -275,6 +275,11 @@ class VolumeClient(CephfsClient["Module"]):
                 ret = self.volume_exception_to_retval(ve)
         return ret
 
+    def subvolume_rm_status(self, **kwargs):
+        ret         = 0, "", ""
+        volname     = kwargs['vol_name']
+        pass
+
     def authorize_subvolume(self, **kwargs):
         ret = 0, "", ""
         volname     = kwargs['vol_name']

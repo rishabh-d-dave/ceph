@@ -6,6 +6,7 @@ import stat
 import cephfs
 
 from .async_job import AsyncJobs
+from .misc_util import Stats, traverse_tree
 from .exception import VolumeException
 from .operations.resolver import resolve_trash
 from .operations.template import SubvolumeOpType
@@ -36,7 +37,8 @@ def get_trash_entry_for_volume(fs_client, volspec, volname, running_jobs):
         return ve.errno, None
 
 
-def subvolume_purge(fs_client, volspec, volname, trashcan, subvolume_trash_entry, should_cancel):
+def subvolume_purge(fs_client, volspec, volname, trashcan,
+                    subvolume_trash_entry, should_cancel, stats):
     groupname, subvolname = resolve_trash(volspec, subvolume_trash_entry.decode('utf-8'))
     log.debug("subvolume resolved to {0}/{1}".format(groupname, subvolname))
 
@@ -50,7 +52,7 @@ def subvolume_purge(fs_client, volspec, volname, trashcan, subvolume_trash_entry
                     # this is fine under the global lock -- there are just a handful
                     # of entries in the subvolume to purge. moreover, the purge needs
                     # to be guarded since a create request might sneak in.
-                    trashcan.purge(subvolume.base_path, should_cancel)
+                    trashcan.purge(subvolume.base_path, should_cancel, stats)
     except VolumeException as ve:
         if not ve.errno == -errno.ENOENT:
             raise
@@ -66,27 +68,34 @@ def purge_trash_entry_for_volume(fs_client, volspec, volname, purge_entry, shoul
             with open_trashcan(fs_handle, volspec) as trashcan:
                 try:
                     pth = os.path.join(trashcan.path, purge_entry)
+                    stats = get_statistics_for_path(path)
+                    stats.log_total_amount()
+
                     stx = fs_handle.statx(pth, cephfs.CEPH_STATX_MODE | cephfs.CEPH_STATX_SIZE,
                                           cephfs.AT_SYMLINK_NOFOLLOW)
                     if stat.S_ISLNK(stx['mode']):
                         tgt = fs_handle.readlink(pth, 4096)
+                        log.info(f'here123 {__name__} tgt = {tgt}')
                         tgt = tgt[:stx['size']]
+                        log.info(f'here123 {__name__} tgt = {tgt}')
                         log.debug("purging entry pointing to subvolume trash: {0}".format(tgt))
                         delink = True
                         try:
-                            trashcan.purge(tgt, should_cancel)
+                            trashcan.purge(tgt, should_cancel, stats)
                         except VolumeException as ve:
                             if not ve.errno == -errno.ENOENT:
                                 delink = False
                                 return ve.errno
                         finally:
                             if delink:
-                                subvolume_purge(fs_client, volspec, volname, trashcan, tgt, should_cancel)
+                                subvolume_purge(fs_client, volspec, volname,
+                                                trashcan, tgt, should_cancel,
+                                                stats)
                                 log.debug("purging trash link: {0}".format(purge_entry))
                                 trashcan.delink(purge_entry)
                     else:
                         log.debug("purging entry pointing to trash: {0}".format(pth))
-                        trashcan.purge(pth, should_cancel)
+                        trashcan.purge(pth, should_cancel, stats)
                 except cephfs.Error as e:
                     log.warn("failed to remove trash entry: {0}".format(e))
     except VolumeException as ve:
