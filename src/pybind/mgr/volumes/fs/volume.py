@@ -12,6 +12,7 @@ import cephfs
 from mgr_util import CephfsClient
 
 from .fs_util import listdir, has_subdir
+from .stats_util import get_stats
 
 from .operations.group import open_group, create_group, remove_group, \
     open_group_unique, set_group_attrs
@@ -846,6 +847,40 @@ class VolumeClient(CephfsClient["Module"]):
             ret = self.volume_exception_to_retval(ve)
         return ret
 
+    def _get_src_path(self, fs_handle, dst_group, dst_subvol):
+        src_subvol_details = dst_subvol._get_clone_source()
+        src_group_name = src_subvol_details.get('group', dst_group.NO_GROUP_NAME)
+        src_subvol_name = src_subvol_details['subvolume']
+
+        if src_group_name != dst_group.groupname:
+            with open_group(fs_handle, self.volspec, src_group_name) as src_group:
+                with open_subvol(self.mgr, fs_handle, self.volspec, src_group,
+                                 src_subvol_name, SubvolumeOpType.GETPATH) as \
+                        src_subvol:
+                    src_path = src_subvol.base_path.decode('utf-8')
+
+        else:
+            with open_subvol(self.mgr, fs_handle, self.volspec, dst_group,
+                             src_subvol_name, SubvolumeOpType.GETPATH) as \
+                    src_subvol:
+                src_path = src_subvol.base_path.decode('utf-8')
+
+        return src_path
+
+    def _get_clone_progress_report(self, fs_handle, dst_group, dst_subvol):
+        dst_path = dst_subvol.base_path.decode('utf-8')
+        src_path = self._get_src_path(fs_handle, dst_group, dst_subvol)
+        stats = get_stats(src_path, dst_path, fs_handle)
+        return stats
+
+    def _get_clone_status(self, fs_handle, group, subvol):
+        status = subvol.status
+        if status['state'] == 'in-progress':
+            stats = self._get_clone_progress_report(fs_handle, group, subvol)
+            status.update({'progress_report': stats})
+
+        return json.dumps({'status' : status}, indent=2)
+
     def clone_status(self, **kwargs):
         ret       = 0, "", ""
         volname   = kwargs['vol_name']
@@ -855,8 +890,9 @@ class VolumeClient(CephfsClient["Module"]):
         try:
             with open_volume(self, volname) as fs_handle:
                 with open_group(fs_handle, self.volspec, groupname) as group:
-                    with open_subvol(self.mgr, fs_handle, self.volspec, group, clonename, SubvolumeOpType.CLONE_STATUS) as subvolume:
-                        ret = 0, json.dumps({'status' : subvolume.status}, indent=2), ""
+                    with open_subvol(self.mgr, fs_handle, self.volspec, group, clonename, SubvolumeOpType.CLONE_STATUS) as subvol:
+                        status = self._get_clone_status(fs_handle, group, subvol)
+                        ret = 0, status, ""
         except VolumeException as ve:
             ret = self.volume_exception_to_retval(ve)
         return ret
