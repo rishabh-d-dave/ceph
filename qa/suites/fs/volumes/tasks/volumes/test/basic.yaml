@@ -2,7 +2,14 @@ tasks:
   - cephfs_test_runner:
       fail_on_skip: false
       modules:
-        - tasks.cephfs.test_volumes.TestVolumes
-        - tasks.cephfs.test_volumes.TestSubvolumeGroups
-        - tasks.cephfs.test_volumes.TestSubvolumes
-        - tasks.cephfs.test_subvolume.TestSubvolume
+        - tasks.cephfs.volume.test_basic
+        - tasks.cephfs.volume.test_info
+        - tasks.cephfs.volume.test_rm
+        - tasks.cephfs.volume.test_rename
+        - tasks.cephfs.volume.subvolume.test_basic
+        - tasks.cephfs.volume.subvolume.test_authorize
+        - tasks.cephfs.volume.subvolume.test_resize
+        - tasks.cephfs.volume.subvolume.test_metadata
+        - tasks.cephfs.volume.subvolume.test_misc
+        - tasks.cephfs.volume.subvolume.test_group
+        - tasks.cephfs.volume.subvolume.test_group_snapshot
