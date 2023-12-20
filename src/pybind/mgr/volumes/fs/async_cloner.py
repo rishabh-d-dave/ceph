@@ -103,7 +103,8 @@ def get_next_state_on_error(errnum):
     return next_state
 
 def handle_clone_pending(fs_client, volspec, volname, index, groupname,
-                         subvolname, thread, should_cancel):
+                         subvolname, thread, clone_delay_every_regfile,
+                         should_cancel):
     try:
         if should_cancel():
             next_state = SubvolumeOpSm.transition(SubvolumeTypes.TYPE_CLONE,
@@ -131,7 +132,7 @@ def sync_attrs(fs_handle, target_path, source_statx):
 
 
 def bulk_copy(fs_handle, src_path, dst_path, dst_sv_name, thread,
-              should_cancel):
+              clone_delay_every_regfile, should_cancel):
     """
     bulk copy data from source to destination -- only directories, symlinks
     and regular files are synced.
@@ -178,6 +179,7 @@ def bulk_copy(fs_handle, src_path, dst_path, dst_sv_name, thread,
                             log.debug("cptree: (REG) {0}".format(d_full_src))
                             copy_file(fs_handle, d_full_src, d_full_dst, mo, cancel_check=should_cancel)
                             stats.size_h += stx['size']
+                            time.sleep(clone_delay_every_regfile)
                         else:
                             handled = False
                             log.warning("cptree: (IGNORE) {0}".format(d_full_src))
@@ -238,7 +240,7 @@ def set_quota_on_clone(fs_handle, clone_volumes_pair):
              raise VolumeException(-e.args[0], e.args[1])
 
 def do_clone(fs_client, volspec, volname, groupname, subvolname, thread,
-             should_cancel):
+             clone_delay_every_regfile, should_cancel):
     with open_volume_lockless(fs_client, volname) as fs_handle:
         with open_clone_subvolume_pair(fs_client, fs_handle, volspec, volname,
                                        groupname, subvolname) \
@@ -248,7 +250,7 @@ def do_clone(fs_client, volspec, volname, groupname, subvolname, thread,
             # XXX: this is where cloning (of subvolume's snapshots) actually
             # happens.
             bulk_copy(fs_handle, src_path, dst_path, subvol0.subvolname,
-                      thread, should_cancel)
+                      thread, clone_delay_every_regfile, should_cancel)
             set_quota_on_clone(fs_handle, (subvol0, subvol1, subvol2))
 
 def update_clone_failure_status(fs_client, volspec, volname, groupname, subvolname, ve):
@@ -270,10 +272,11 @@ def log_clone_failure(volname, groupname, subvolname, ve):
         log.error("Clone failed: ({0}, {1}, {2}, reason -> {3})".format(volname, groupname, subvolname, ve))
 
 def handle_clone_in_progress(fs_client, volspec, volname, index, groupname,
-                             subvolname, thread, should_cancel):
+                             subvolname, thread, clone_delay_every_regfile,
+                             should_cancel):
     try:
         do_clone(fs_client, volspec, volname, groupname, subvolname, thread,
-                 should_cancel)
+                  clone_delay_every_regfile, should_cancel)
         next_state = SubvolumeOpSm.transition(SubvolumeTypes.TYPE_CLONE,
                                               SubvolumeStates.STATE_INPROGRESS,
                                               SubvolumeActions.ACTION_SUCCESS)
@@ -286,7 +289,8 @@ def handle_clone_in_progress(fs_client, volspec, volname, index, groupname,
     return (next_state, False)
 
 def handle_clone_failed(fs_client, volspec, volname, index, groupname,
-                        subvolname, thread, should_cancel):
+                        subvolname, thread, clone_delay_every_regfile,
+                        should_cancel):
     try:
         with open_volume(fs_client, volname) as fs_handle:
             # detach source but leave the clone section intact for later inspection
@@ -299,7 +303,8 @@ def handle_clone_failed(fs_client, volspec, volname, index, groupname,
     return (None, True)
 
 def handle_clone_complete(fs_client, volspec, volname, index, groupname,
-                          subvolname, thread, should_cancel):
+                          subvolname, thread, clone_delay_every_regfile,
+                          should_cancel):
     try:
         with open_volume(fs_client, volname) as fs_handle:
             with open_clone_subvolume_pair(fs_client, fs_handle, volspec,
@@ -312,7 +317,8 @@ def handle_clone_complete(fs_client, volspec, volname, index, groupname,
     return (None, True)
 
 def start_clone_sm(fs_client, volspec, volname, index, groupname, subvolname,
-                   thread, state_table, should_cancel, snapshot_clone_delay):
+                   thread, state_table, should_cancel, snapshot_clone_delay,
+                   clone_delay_every_regfile):
     finished = False
     current_state = None
     try:
@@ -332,7 +338,8 @@ def start_clone_sm(fs_client, volspec, volname, index, groupname, subvolname,
             # operation is run through "handler".
             (next_state, finished) = handler(fs_client, volspec, volname,
                                              index, groupname, subvolname,
-                                             thread, should_cancel)
+                                             thread,clone_delay_every_regfile,
+                                             should_cancel)
             if next_state:
                 log.debug("({0}, {1}, {2}) transition state [\"{3}\" => \"{4}\"]".format(volname, groupname, subvolname,\
                                                                                          current_state, next_state))
@@ -344,7 +351,7 @@ def start_clone_sm(fs_client, volspec, volname, index, groupname, subvolname,
         raise
 
 def clone(fs_client, volspec, volname, index, clone_path, thread, state_table,
-          should_cancel, snapshot_clone_delay):
+          should_cancel, snapshot_clone_delay, clone_delay_every_regfile):
     log.info("cloning to subvolume path: {0}".format(clone_path))
     resolved = resolve(volspec, clone_path)
 
@@ -356,7 +363,7 @@ def clone(fs_client, volspec, volname, index, clone_path, thread, state_table,
         log.info("starting clone: ({0}, {1}, {2})".format(volname, groupname, subvolname))
         start_clone_sm(fs_client, volspec, volname, index, groupname,
                        subvolname, thread, state_table, should_cancel,
-                       snapshot_clone_delay)
+                       snapshot_clone_delay, clone_delay_every_regfile)
         log.info("finished clone: ({0}, {1}, {2})".format(volname, groupname, subvolname))
     except (MetadataMgrException, VolumeException) as e:
         log.error(f"clone failed for ({volname}, {groupname}, {subvolname}), reason: {e} {os.strerror(-e.args[0])}")
@@ -370,6 +377,7 @@ class Cloner(AsyncJobs):
     def __init__(self, volume_client, tp_size, snapshot_clone_delay):
         self.vc = volume_client
         self.snapshot_clone_delay = snapshot_clone_delay
+        self.clone_delay_every_regfile = 0
         self.state_table = {
             SubvolumeStates.STATE_PENDING      : handle_clone_pending,
             SubvolumeStates.STATE_INPROGRESS   : handle_clone_in_progress,
@@ -384,6 +392,11 @@ class Cloner(AsyncJobs):
 
     def reconfigure_snapshot_clone_delay(self, timeout):
         self.snapshot_clone_delay = timeout
+
+    def reconfigure_clone_delay_every_regfile(self, timeout):
+        if timeout is None:
+            timeout = 0
+        self.clone_delay_every_regfile = timeout
 
     def is_clone_cancelable(self, clone_state):
         return not (SubvolumeOpSm.is_complete_state(clone_state) or SubvolumeOpSm.is_failed_state(clone_state))
@@ -457,4 +470,5 @@ class Cloner(AsyncJobs):
     def execute_job(self, volname, job, should_cancel):
         clone(self.fs_client, self.vc.volspec, volname,
               job[0].decode('utf-8'), job[1].decode('utf-8'), self,
-              self.state_table, should_cancel, self.snapshot_clone_delay)
+              self.state_table, should_cancel, self.snapshot_clone_delay,
+              self.clone_delay_every_regfile)
