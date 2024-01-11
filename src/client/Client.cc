@@ -11039,6 +11039,7 @@ void Client::do_readahead(Fh *f, Inode *in, uint64_t off, uint64_t len)
 
 void Client::C_Read_Async_Finisher::finish(int r)
 {
+  clnt->put_cap_ref(in, CEPH_CAP_FILE_CACHE);
   // Do read ahead as long as we aren't completing with 0 bytes
   if (r != 0)
     clnt->do_readahead(f, in, off, len);
@@ -11062,6 +11063,8 @@ int Client::_read_async(Fh *f, uint64_t off, uint64_t len, bufferlist *bl,
     io_finish.reset(new C_Read_Async_Finisher(this, onfinish, f, in,
                                               f->pos, off, len));
   }
+
+  get_cap_ref(in, CEPH_CAP_FILE_CACHE);
 
   // trim read based on file size?
   if ((off >= in->size) || (len == 0)) {
@@ -11108,20 +11111,17 @@ int Client::_read_async(Fh *f, uint64_t off, uint64_t len, bufferlist *bl,
     if (r != 0) {
       // need to do readahead, so complete the crf
       crf->complete(r);
-    } else {
-      get_cap_ref(in, CEPH_CAP_FILE_CACHE);
     }
     return 0;
   }
 
   if (r == 0) {
-    get_cap_ref(in, CEPH_CAP_FILE_CACHE);
     client_lock.unlock();
     r = io_finish_cond->wait();
     client_lock.lock();
-    put_cap_ref(in, CEPH_CAP_FILE_CACHE);
     update_read_io_size(bl->length());
   }
+  put_cap_ref(in, CEPH_CAP_FILE_CACHE);
 
   do_readahead(f, in, off, len);
 
