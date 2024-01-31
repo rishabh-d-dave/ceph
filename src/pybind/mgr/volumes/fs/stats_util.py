@@ -79,6 +79,45 @@ def get_num_h(num):
 
             return f'{x}.{y} {size[i]}' if y else f'{x} {size[i]}'
 
+def get_size_ratio_str(size1, size2, human=True):
+    if human:
+        size1, size2 = get_size_h(size1), get_size_h(size2)
+
+    return f'{size1}/{size2}'
+
+
+def get_num_ratio_str(num1, num2, human=True):
+    if human:
+        num1, num2 = get_num_h(num1), get_num_h(num2)
+
+    return f'{num1}/{num2}'
+
+
+def get_stats(src_path, dst_path, fsh, human=True, should_cancel=False):
+    rfiles = 'ceph.dir.rfiles'
+    rsubdirs = 'ceph.dir.rsubdirs'
+    rbytes = 'ceph.dir.rbytes'
+
+    rfiles_t = int(fsh.getxattr(src_path, rfiles))
+    subdirs_t = int(fsh.getxattr(src_path, rsubdirs))
+    size_t = int(fsh.getxattr(src_path, rbytes))
+
+    rfiles_c = int(fsh.getxattr(dst_path, rfiles))
+    subdirs_c = int(fsh.getxattr(dst_path,rsubdirs))
+    size_c = int(fsh.getxattr(dst_path, rbytes))
+
+    if size_t == 0:
+        return -1 if size_c == 0 else -2
+    percent = ((size_c/size_t) * 100)
+    percent = round(percent, 2)
+
+    return {
+        'percentage cloned': percent,
+        'amount cloned': get_size_ratio_str(size_c, size_t, human),
+        'regfiles cloned': get_num_ratio_str(rfiles_c, rfiles_t, human),
+        'subdirs cloned': get_num_ratio_str(subdirs_c, subdirs_t, human)
+    }
+
 
 class Stats:
     '''

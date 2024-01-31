@@ -132,6 +132,9 @@ class SubvolumeV1(SubvolumeBase, SubvolumeTemplate):
             self.metadata_mgr.update_section("source", "group", subvolume.group_name)
         self.metadata_mgr.update_section("source", "subvolume", subvolume.subvol_name)
         self.metadata_mgr.update_section("source", "snapshot", snapname)
+        self.metadata_mgr.update_section(
+            "source", "path", subvolume.base_path.decode('utf-8'))
+
         if flush:
             self.metadata_mgr.flush()
 
@@ -656,10 +659,12 @@ class SubvolumeV1(SubvolumeBase, SubvolumeTemplate):
 
     def _get_clone_source(self):
         try:
+            d = self.metadata_mgr.list_all_options_from_section('source')
             clone_source = {
                 'volume'   : self.metadata_mgr.get_option("source", "volume"),
                 'subvolume': self.metadata_mgr.get_option("source", "subvolume"),
                 'snapshot' : self.metadata_mgr.get_option("source", "snapshot"),
+                'path' : self.metadata_mgr.get_option("source", "path"),
             }
 
             try:
