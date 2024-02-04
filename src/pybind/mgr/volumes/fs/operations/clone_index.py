@@ -8,7 +8,7 @@ import cephfs
 
 from .index import Index
 from ..exception import IndexException, VolumeException
-from ..fs_util import list_one_entry_at_a_time
+from ..fs_util import list_one_entry_at_a_time, listdir
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +46,9 @@ class CloneIndex(Index):
             self.fs.unlink(source_path)
         except cephfs.Error as e:
             raise IndexException(-e.args[0], e.args[1])
+
+    def list_entries(self):
+        return listdir(self.fs, self.path, filter_files=False)
 
     def get_oldest_clone_entry(self, exclude=[]):
         min_ctime_entry = None
