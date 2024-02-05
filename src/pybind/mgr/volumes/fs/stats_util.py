@@ -8,6 +8,7 @@ conveniently.
 from os.path import join as os_path_join
 from uuid import uuid4
 from typing import Optional
+from logging import getLogger
 
 from .operations.volume import open_volume_lockless, list_volumes
 from .operations.subvolume import open_clone_sv_pair_in_vol
@@ -16,6 +17,9 @@ from .operations.resolver import resolve_group_and_subvolume_name
 
 from mgr_util import RTimer, format_bytes, format_dimless
 from cephfs import ObjectNotFound
+
+
+log = getLogger(__name__)
 
 
 PATH_MAX = 4096
@@ -53,6 +57,11 @@ def get_amount_copied(src_path, dst_path, fs_handle, human=True):
         percent = round(percent, 3)
 
     return size_t, size_c, percent
+
+
+def get_percent_copied(src_path, dst_path, fs_handle, human=True):
+    _, _, percent = get_amount_copied(src_path, dst_path, fs_handle)
+    return percent
 
 
 def get_stats(src_path, dst_path, fs_handle, human=True):
@@ -95,7 +104,7 @@ class CloneProgressReporter:
 
         # Creating an RTimer instance in advance so that we can check if clone
         # reporting has already been initiated by calling RTimer.is_alive().
-        self.update_task = RTimer(1, self._update_progress_bar)
+        self.update_task = RTimer(1, self._update_progress_bars)
 
     def initiate_reporting(self):
         if not self.update_task.is_alive():
@@ -129,7 +138,7 @@ class CloneProgressReporter:
             with open_volume_lockless(self.volclient, volname) as fs_handle:
                 with open_clone_index(fs_handle, self.vol_spec) as clone_index:
                     clone_index_path = clone_index.path
-                    clone_entries = clone_index.list_entries()
+                    clone_entries = clone_index.list_entries_by_ctime_order()
 
             for ce in clone_entries:
                 ci = CloneInfo(volname)
@@ -149,20 +158,29 @@ class CloneProgressReporter:
 
         return clones
 
-    def _update_progress_bar(self):
+    def _update_progress_bars(self):
         assert self.pev_id is not None
-        clone = self._get_info_for_all_clones()
-        if not clone:
+
+        percent = 0.0
+        sum_precent = 0.0
+        avg_percent = 0.0
+
+        clones = self._get_info_for_all_clones()
+        if not clones:
             self._finish()
             return
 
-        with open_volume_lockless(self.volclient, clone.volname) as fs_handle:
-            _, _, percent = get_amount_copied(clone.src_path, clone.dst_path,
-                                          fs_handle)
+        for clone in clones:
+            with open_volume_lockless(self.volclient, clone.volname) as \
+                    fs_handle:
+                percent = get_percent_copied(clone.src_path, clone.dst_path,
+                                             fs_handle)
+                sum_percent += percent
 
+        avg_percent = round(sum_percent / len(clones), 3)
         # progress module takes progress as a fraction between 0.0 to 1.0.
-        progress_fraction = percent / 100
-        msg = f'Subvolume "{self.dst_svname}" has been {percent}% cloned'
+        progress_fraction = avg_percent / 100
+        msg = f'Avg progress made by {len(clones)} clones is {percent}%'
 
         self.volclient.mgr.remote('progress', 'update', ev_id=self.pev_id,
                            ev_msg=msg, ev_progress=progress_fraction,

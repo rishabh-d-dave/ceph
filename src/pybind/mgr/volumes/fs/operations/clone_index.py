@@ -50,6 +50,24 @@ class CloneIndex(Index):
     def list_entries(self):
         return listdir(self.fs, self.path, filter_files=False)
 
+    def list_entries_by_ctime_order(self):
+        entry_names = self.list_entries()
+
+        # clone entries with ctime obtained by statig them. basically,
+        # following is a list of tuples where each tuple has 2 memebers.
+        ens_with_ctime = []
+        for en in entry_names:
+            d_path = os.path.join(self.path, en)
+            stb = self.fs.lstat(d_path)
+
+            # add ctime next to clone entry
+            ens_with_ctime.append((en, stb.st_ctime))
+
+        ens_with_ctime.sort(key=lambda ctime: en[1])
+
+        # remove ctime and return list of clone entries sorted by ctime.
+        return [i[0] for i in ens_with_ctime]
+
     def get_oldest_clone_entry(self, exclude=[]):
         min_ctime_entry = None
         exclude_tracking_ids = [v[0] for v in exclude]
