@@ -7,6 +7,7 @@ conveniently.
 '''
 from os.path import join as os_path_join
 from uuid import uuid4
+from time import time, sleep
 from typing import Optional
 from logging import getLogger
 
@@ -102,14 +103,27 @@ class CloneProgressReporter:
         # LibCephFS.getxattr() can be made.
         self.volclient = volclient
 
+        # need to figure out how many progress bars should be printed. print 1
+        # progress bar if number of ongoing clones is less than this value,
+        # else print 2.
+        self.max_concurrent_clones = self.volclient.mgr.max_concurrent_clones
+
         # Creating an RTimer instance in advance so that we can check if clone
         # reporting has already been initiated by calling RTimer.is_alive().
         self.update_task = RTimer(1, self._update_progress_bars)
 
     def initiate_reporting(self):
-        if not self.update_task.is_alive():
-            self.pev_id = str(uuid4())
-            self.update_task.start()
+        if self.update_task.is_alive():
+            return
+
+        # progress event ID for ongoing clone jobs
+        self.on_pev_id: Optional[str] = str(uuid4())
+        # progress event ID for ongoing+pending clone jobs
+        self.onpen_pev_id: Optional[str] = str(uuid4())
+        self.show_onpen_bar = False
+
+        self.update_task = RTimer(1, self._update_progress_bars)
+        self.update_task.start()
 
     def _get_clone_dst_info(self, fs_handle, ci, clone_entry,
                             clone_index_path):
@@ -158,17 +172,38 @@ class CloneProgressReporter:
 
         return clones
 
-    def _update_progress_bars(self):
-        assert self.pev_id is not None
+    def _update_progress_bar_event(self, ev_id, ev_msg, ev_progress_fraction):
+        # in case this remote call on RTimer fails, its details won't printed,
+        # logged or would cause a crash. therefore, leaving some info for
+        # debugging in logs
+        log.info(f'ev_id = {ev_id} ev_progress_fraction = {ev_progress_fraction}')
+        log.info(f'ev_msg = {ev_msg}')
 
-        percent = 0.0
-        sum_precent = 0.0
-        avg_percent = 0.0
+        self.volclient.mgr.remote('progress', 'update', ev_id=ev_id,
+                                  ev_msg=ev_msg,
+                                  ev_progress=ev_progress_fraction,
+                                  refs=['mds', 'clone'], add_to_ceph_s=True)
 
-        clones = self._get_info_for_all_clones()
-        if not clones:
-            self._finish()
+        log.info('update() of mgr/progress executed successfully')
+
+    def _update_onpen_progress_bar(self, clones):
+        '''
+        Update the progress bar for ongoing + pending cloning operations.
+        '''
+        assert self.onpen_pev_id is not None
+
+        # onpen bar (that is progress bar for clone jobs in ongoing and pending
+        # state) is printed when clones are in pending state. it is kept in
+        # printing until all clone jobs finish.
+        if len(clones) > self.max_concurrent_clones:
+            self.show_onpen_bar = True
+        if not self.show_onpen_bar:
             return
+
+        total_clones = len(clones)
+        percent = 0.0
+        sum_percent = 0.0
+        avg_percent = 0.0
 
         for clone in clones:
             with open_volume_lockless(self.volclient, clone.volname) as \
@@ -177,22 +212,73 @@ class CloneProgressReporter:
                                              fs_handle)
                 sum_percent += percent
 
-        avg_percent = round(sum_percent / len(clones), 3)
+        avg_percent = round(sum_percent / total_clones, 3)
         # progress module takes progress as a fraction between 0.0 to 1.0.
-        progress_fraction = avg_percent / 100
-        msg = f'Avg progress made by {len(clones)} clones is {percent}%'
+        avg_progress_fraction = avg_percent / 100
+        msg = (f'{total_clones} ongoing+pending clones; Avg progress is '
+               f'{avg_percent}%')
+        self._update_progress_bar_event(ev_id=self.onpen_pev_id, ev_msg=msg,
+                                    ev_progress_fraction=avg_progress_fraction)
 
-        self.volclient.mgr.remote('progress', 'update', ev_id=self.pev_id,
-                           ev_msg=msg, ev_progress=progress_fraction,
-                           refs=['mds', 'clone'], add_to_ceph_s=True)
+    def _update_ongoing_progress_bar(self, clones):
+        '''
+        Update the progress bar for ongoing cloning operations.
+        '''
+        assert self.on_pev_id is not None
 
-        if progress_fraction == 1.0:
+        percent = 0.0
+        sum_percent = 0.0
+        avg_percent = 0.0
+
+        if len(clones) < self.max_concurrent_clones:
+            total_clones = len(clones)
+        else:
+            total_clones = self.max_concurrent_clones
+
+        for clone in clones[:4]:
+            with open_volume_lockless(self.volclient, clone.volname) as \
+                    fs_handle:
+                percent = get_percent_copied(clone.src_path, clone.dst_path,
+                                             fs_handle)
+                sum_percent += percent
+
+        avg_percent = round(sum_percent / total_clones, 3)
+        # progress module takes progress as a fraction between 0.0 to 1.0.
+        avg_progress_fraction = avg_percent / 100
+        msg = f'{total_clones} ongoing clones; Avg progress is {avg_percent}%'
+        self._update_progress_bar_event(ev_id=self.on_pev_id, ev_msg=msg,
+                                    ev_progress_fraction=avg_progress_fraction)
+
+    def _update_progress_bars(self):
+        '''
+        Look for amount of progress made by all cloning operations and prints
+        progress bars, in "ceph -s" output, for average progress made
+        accordingly.
+
+        This method is supposed to be run only by instance of class RTimer
+        present in this class.
+        '''
+        clones = self._get_info_for_all_clones()
+        if not clones:
             self._finish()
+            return
+
+        self._update_ongoing_progress_bar(clones)
+        self._update_onpen_progress_bar(clones)
 
     def _finish(self):
-        assert self.pev_id is not None
+        '''
+        All cloning has been finished. Remove progress bars from "ceph -s"
+        output.
+        '''
+        assert self.on_pev_id is not None
+        assert self.onpen_pev_id is not None
 
-        self.volclient.mgr.remote('progress', 'complete', self.pev_id)
-        self.pev_id = None
+        self.volclient.mgr.remote('progress', 'complete', self.on_pev_id)
+        self.on_pev_id = None
+
+        self.volclient.mgr.remote('progress', 'complete', self.onpen_pev_id)
+        self.onpen_pev_id = None
+        self.show_onpen_bar = False
 
         self.update_task.finished.set()
