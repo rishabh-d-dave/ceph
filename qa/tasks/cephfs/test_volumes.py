@@ -277,7 +277,7 @@ class TestVolumesHelper(CephFSTestCase):
 
         log.debug("filling subvolume {0} with {1} files each {2}MB size under directory {3}".format(subvolume, number_of_files, file_size, io_path))
 
-        for i in range(number_of_files+1):
+        for i in range(1, number_of_files+1):
             filename = "{0}.{1}".format(TestVolumes.TEST_FILE_NAME_PREFIX, i)
             self.mount_a.write_n_mb(os.path.join(io_path, filename), file_size)
 
