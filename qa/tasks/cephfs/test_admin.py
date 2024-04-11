@@ -1412,14 +1412,14 @@ class TestFsAuthorize(CephFSTestCase):
         """
         Test root_squash with multi fs
         """
+        if not isinstance(self.mount_a, FuseMount):
+            self.skipTest("only FUSE client has CEPHFS_FEATURE_MDS_AUTH_CAPS "
+                          "needed to enforce root_squash MDS caps")
+
         self.fs1 = self.fs
         self.fs2 = self.mds_cluster.newfs('testcephfs2')
         self.mount_b.remount(cephfs_name=self.fs2.name)
         self.captesters = (CapTester(self.mount_a), CapTester(self.mount_b))
-
-        if not isinstance(self.mount_a, FuseMount):
-            self.skipTest("only FUSE client has CEPHFS_FEATURE_MDS_AUTH_CAPS "
-                          "needed to enforce root_squash MDS caps")
 
         # Authorize client to fs1
         PERM = 'rw'
