@@ -1645,6 +1645,7 @@ class TestFsAuthorize(CephFSTestCase):
             self.assertIn(i, (0, 1))
             PATH = c[0]
             PERM = c[1]
+            import pdb; pdb.set_trace()
             self._remount(keyring, PATH)
             # actual tests...
             self.captesters[i].run_cap_tests(self.fs, self.client_id, PERM,

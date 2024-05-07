@@ -685,7 +685,8 @@ class LocalCephFSMount():
         self.fs = LocalFilesystem(self.ctx, name=self.cephfs_name)
 
         output = self.fs.mon_manager.raw_cluster_cmd(args='osd blocklist ls')
-        return self.addr in output
+
+        return False if self.addr is None else self.addr in output
 
 
 class LocalKernelMount(LocalCephFSMount, tasks.cephfs.kernel_mount.KernelMountBase):
