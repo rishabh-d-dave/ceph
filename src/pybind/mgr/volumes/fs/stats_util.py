@@ -260,16 +260,66 @@ class CloneProgressReporter:
         '''
         clones = self._get_info_for_all_clones()
         if not clones:
-            self._finish()
+            self._wait_and_finish()
             return
 
         self._update_ongoing_progress_bar(clones)
         self._update_onpen_progress_bar(clones)
 
+    def _set_waiting_period_msg(self, time_left):
+        avg_progress_fraction = 1.0
+
+        msg_on = (f'All cloning finished, waiting {time_left} seconds before '
+                'exiting')
+        self._update_progress_bar_event(
+            ev_id=self.on_pev_id, ev_msg=msg_on,
+            ev_progress_fraction=avg_progress_fraction)
+
+        if self.show_onpen_bar:
+            msg_onpen = (f'No pending clones left, waiting {time_left} '
+                          'seconds before exiting')
+            self._update_progress_bar_event(
+                ev_id=self.onpen_pev_id, ev_msg=msg_onpen,
+                ev_progress_fraction=avg_progress_fraction)
+
+    def _wait_and_finish(self):
+        '''
+        All cloning has been finished. Wait for some time before terminating
+        the/this thread updating and deleting the objects for progress bar
+        events. In case new clones are launched, all these resources can be
+        reused.
+        '''
+        log.info('waiting for new clones before terminating this thread.')
+
+        interval = 1
+        wait_limit = 30
+        start_time = time()
+        cur_time = start_time
+        time_elapsed = cur_time - start_time
+        time_left = wait_limit - time_elapsed
+
+        self._set_waiting_period_msg(time_left)
+
+        while time_elapsed < wait_limit:
+            clones = self._get_info_for_all_clones()
+            if len(clones):
+                return
+
+            sleep(interval)
+            cur_time += interval
+            time_elapsed = cur_time - start_time
+            time_left = wait_limit - time_elapsed
+
+            self._set_waiting_period_msg(time_left)
+
+        log.info('no new clones were launched during waiting period, '
+                 'terminating this thread and related resources now.')
+        self._finish()
+
     def _finish(self):
         '''
-        All cloning has been finished. Remove progress bars from "ceph -s"
-        output.
+        All cloning has been finished and enough waiting has been done for new
+        clones to appear. Remove progress bars from "ceph -s" output.
         '''
         assert self.on_pev_id is not None
         assert self.onpen_pev_id is not None
