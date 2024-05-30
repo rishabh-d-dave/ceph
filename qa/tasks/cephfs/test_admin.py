@@ -1610,9 +1610,6 @@ class TestFsAuthorize(CephFSTestCase):
         That fs authorize command works on filesystems with names having [_.-]
         characters
         """
-        self.skipTest('this test is broken ATM, see: '
-                      'https://tracker.ceph.com/issues/66077')
-
         self.mount_a.umount_wait(require_clean=True)
         self.mds_cluster.delete_all_filesystems()
         fs_name = "cephfs-_."
@@ -1628,6 +1625,7 @@ class TestFsAuthorize(CephFSTestCase):
         self.captester = CapTester(self.mount_a, '/')
         keyring = self.fs.authorize(self.client_id, FS_AUTH_CAPS)
 
+        sleep(5)
         self._remount(keyring)
         self.captester.run_mds_cap_tests(PERM)
 
