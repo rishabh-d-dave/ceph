@@ -2,6 +2,7 @@ from io import StringIO
 from logging import getLogger
 from os import getcwd as os_getcwd
 from os.path import join
+from os.path import dirname
 from textwrap import dedent
 
 
@@ -92,6 +93,14 @@ class XFSTestsDev(CephFSTestCase):
                 return
 
         src = join(self.xfstests_repo_path, self.RESULTS_DIR)
+
+        proc2 = self.mount_a.run_shell(f'sudo ls -alR {self.mount_a.hostfs_mntpt}',
+                check_status=False, omit_sudo=False)
+        log.info(f'proc2.returncode = {proc2.returncode}')
+        hostfs_mntpt_parent_dir = dirname(self.mount_a.hostfs_mntpt)
+        proc2 = self.mount_a.run_shell(f'sudo ls -alR {hostfs_mntpt_parent_dir}',
+            check_status=False, omit_sudo=False)
+        log.info(f'proc2.returncode = {proc2.returncode}')
 
         if self.mount_a.run_shell(f'sudo stat {src}',
                 check_status=False, omit_sudo=False).returncode != 0:

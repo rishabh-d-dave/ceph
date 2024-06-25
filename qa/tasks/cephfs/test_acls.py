@@ -1,4 +1,5 @@
 from logging import getLogger
+from os.path import dirname
 
 from io import StringIO
 from tasks.cephfs.xfstests_dev import XFSTestsDev
@@ -18,6 +19,14 @@ class TestACLs(XFSTestsDev):
         elif isinstance(self.mount_a, KernelMount):
             log.info('client is kernel mounted')
 
+        proc2 = self.mount_a.run_shell(f'sudo ls -alR {self.mount_a.hostfs_mntpt}',
+            check_status=False, omit_sudo=False)
+        log.info(f'proc2.returncode = {proc2.returncode}')
+        hostfs_mntpt_parent_dir = dirname(self.mount_a.hostfs_mntpt)
+        proc2 = self.mount_a.run_shell(f'sudo ls -alR {hostfs_mntpt_parent_dir}',
+            check_status=False, omit_sudo=False)
+        log.info(f'proc2.returncode = {proc2.returncode}')
+
         # XXX: check_status is set to False so that we can check for command's
         # failure on our own (since this command doesn't set right error code
         # and error message in some cases) and print custom log messages
@@ -26,6 +35,23 @@ class TestACLs(XFSTestsDev):
             './check', 'generic/099'], cwd=self.xfstests_repo_path, stdout=StringIO(),
             stderr=StringIO(), timeout=30, check_status=False,omit_sudo=False,
             label='running tests for ACLs from xfstests-dev')
+
+        proc2 = self.mount_a.run_shell('sudo ls -alR', check_status=False,
+            cwd='/home/ubuntu/cephtest', omit_sudo=False)
+        log.info(f'proc2.returncode = {proc2.returncode}')
+        proc2 = self.mount_a.run_shell(f'sudo ls -alR {self.mount_a.hostfs_mntpt}',
+            check_status=False, omit_sudo=False)
+        log.info(f'proc2.returncode = {proc2.returncode}')
+        hostfs_mntpt_parent_dir = dirname(self.mount_a.hostfs_mntpt)
+
+        proc2 = self.mount_a.run_shell(f'ls -alR {self.mount_a.hostfs_mntpt}',
+            check_status=False, omit_sudo=False)
+        log.info(f'proc2.returncode = {proc2.returncode}')
+        hostfs_mntpt_parent_dir = dirname(self.mount_a.hostfs_mntpt)
+        proc2 = self.mount_a.run_shell(f'ls -alR {hostfs_mntpt_parent_dir}',
+            check_status=False, omit_sudo=False)
+        log.info(f'proc2.returncode = {proc2.returncode}')
+
 
         if proc.returncode != 0:
             log.info('Command failed.')
