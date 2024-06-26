@@ -1612,9 +1612,6 @@ class TestFsAuthorize(CephFSTestCase):
         """
         self.mount_a.umount_wait(require_clean=True)
         self.mount_b.umount_wait(require_clean=True)
-        # so that there's no confusion about whether or not we have
-        # self.mount_b
-        self.mount_b = None
         self.mds_cluster.delete_all_filesystems()
         fs_name = "cephfs-_."
         self.fs = self.mds_cluster.newfs(name=fs_name)
@@ -1624,6 +1621,7 @@ class TestFsAuthorize(CephFSTestCase):
                           f'osd "allow rw pool={self.fs.get_data_pool_name()}" '
                           f'mds allow')
         self.mount_a.remount(cephfs_name=self.fs.name)
+        self.mount_b.remount(cephfs_name=self.fs.name)
         PERM = 'rw'
         FS_AUTH_CAPS = (('/', PERM),)
         self.captester = CapTester(self.mount_a, '/')
@@ -1760,11 +1758,15 @@ class TestFsAuthorize(CephFSTestCase):
         keyring_path = self.mount_a.client_remote.mktemp(data=keyring)
         out = self.mount_a.run_shell('cat testdir/testfile').stdout.getvalue()
         log.info(f'here123 _remount mount_a: contents of testfile -\n{out}')
+        out = self.mount_b.run_shell('cat testdir/testfile').stdout.getvalue()
+        log.info(f'here123 _remount mount_b: contents of testfile -\n{out}')
         self.mount_a.remount(client_id=self.client_id,
                              client_keyring_path=keyring_path,
                              cephfs_mntpt=path)
         out = self.mount_a.run_shell('cat testdir/testfile').stdout.getvalue()
         log.info(f'here123 _remount mount_a: contents of testfile -\n{out}')
+        out = self.mount_b.run_shell('cat testdir/testfile').stdout.getvalue()
+        log.info(f'here123 _remount mount_b: contents of testfile -\n{out}')
 
     def _remount_and_run_tests_for_cap(self, cap, captester, fsname, mount,
                                        keyring):
