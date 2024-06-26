@@ -1611,6 +1611,10 @@ class TestFsAuthorize(CephFSTestCase):
         characters
         """
         self.mount_a.umount_wait(require_clean=True)
+        self.mount_b.umount_wait(require_clean=True)
+        # so that there's no confusion about whether or not we have
+        # self.mount_b
+        self.mount_b = None
         self.mds_cluster.delete_all_filesystems()
         fs_name = "cephfs-_."
         self.fs = self.mds_cluster.newfs(name=fs_name)
@@ -1625,9 +1629,9 @@ class TestFsAuthorize(CephFSTestCase):
         self.captester = CapTester(self.mount_a, '/')
         keyring = self.fs.authorize(self.client_id, FS_AUTH_CAPS)
 
-        sleep(5)
         self._remount(keyring)
         self.captester.run_mds_cap_tests(PERM)
+        out = self.mount_a.run_shell('cat testdir/testfile').stdout.getvalue()
 
     def test_multiple_path_r(self):
         PERM = 'r'
@@ -1754,9 +1758,13 @@ class TestFsAuthorize(CephFSTestCase):
 
     def _remount(self, keyring, path='/'):
         keyring_path = self.mount_a.client_remote.mktemp(data=keyring)
+        out = self.mount_a.run_shell('cat testdir/testfile').stdout.getvalue()
+        log.info(f'here123 _remount mount_a: contents of testfile -\n{out}')
         self.mount_a.remount(client_id=self.client_id,
                              client_keyring_path=keyring_path,
                              cephfs_mntpt=path)
+        out = self.mount_a.run_shell('cat testdir/testfile').stdout.getvalue()
+        log.info(f'here123 _remount mount_a: contents of testfile -\n{out}')
 
     def _remount_and_run_tests_for_cap(self, cap, captester, fsname, mount,
                                        keyring):
