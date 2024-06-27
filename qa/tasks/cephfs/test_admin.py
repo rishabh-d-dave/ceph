@@ -1447,9 +1447,6 @@ class TestFsAuthorize(CephFSTestCase):
         """
         Test root_squash with multi fs
         """
-        self.skipTest('this test is broken ATM, see: '
-                      'https://tracker.ceph.com/issues/66076.')
-
         self.fs1 = self.fs
         self.fs2 = self.mds_cluster.newfs('testcephfs2')
         self.mount_b.remount(cephfs_name=self.fs2.name)
