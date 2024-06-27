@@ -249,7 +249,9 @@ class MdsCapTester:
         Run test for read perm and, for write perm, run positive test if it
         is present and run negative test if not.
         """
+        log.info('run_mds_cap_tests: self.path = {self.path}')
         if mntpt and mntpt != '/':
+            log.info('run_mds_cap_tests: self.path is being modified')
             # beacaue we want to value of mntpt from test_set.path along with
             # slash that precedes it.
             mntpt = '/' + mntpt if mntpt[0] != '/' else mntpt
@@ -260,6 +262,7 @@ class MdsCapTester:
             #   cephfs dir serving as root for current mnt: /dir1/dir2
             #   therefore, final path: /mnt/cephfs_x/testdir
             self.path = self.path.replace(mntpt, '')
+        log.info('run_mds_cap_tests: self.path = {self.path}')
 
         self.conduct_pos_test_for_read_caps()
 
