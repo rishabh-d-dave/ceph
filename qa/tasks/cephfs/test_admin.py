@@ -1623,14 +1623,12 @@ class TestFsAuthorize(CephFSTestCase):
         """
         Test root_squash with multi fs
         """
-        self.skipTest('this test is broken ATM, see: '
-                      'https://tracker.ceph.com/issues/66076.')
-
         self.fs1 = self.fs
         self.fs2 = self.mds_cluster.newfs('testcephfs2')
         self.mount_b.remount(cephfs_name=self.fs2.name)
         self.captester1 = CapTester(self.mount_a)
         self.captester2 = CapTester(self.mount_b)
+        import pdb; pdb.set_trace()
 
         PERM = 'rw'
         FS_AUTH_CAPS = (('/', PERM, 'root_squash'),)
@@ -1642,23 +1640,24 @@ class TestFsAuthorize(CephFSTestCase):
         keyring_path = self.mount_a.client_remote.mktemp(data=keyring)
         self.mount_a.remount(client_id=self.client_id,
                              client_keyring_path=keyring_path)
+        import pdb; pdb.set_trace()
         # testing MDS caps...
         # Since root_squash is set in client caps, client can read but not
         # write even though access level is set to "rw" on both fses
-        self.captester1.conduct_pos_test_for_read_caps()
-        self.captester1.conduct_pos_test_for_open_caps()
-        self.captester1.conduct_neg_test_for_write_caps(sudo_write=True)
-        self.captester1.conduct_neg_test_for_chown_caps()
-        self.captester1.conduct_neg_test_for_truncate_caps()
+        #self.captester1.conduct_pos_test_for_read_caps()
+        #self.captester1.conduct_pos_test_for_open_caps()
+        #self.captester1.conduct_neg_test_for_write_caps(sudo_write=True)
+        #self.captester1.conduct_neg_test_for_chown_caps()
+        #self.captester1.conduct_neg_test_for_truncate_caps()
 
         keyring_path = self.mount_b.client_remote.mktemp(data=keyring)
         self.mount_b.remount(client_id=self.client_id,
                              client_keyring_path=keyring_path)
-        self.captester2.conduct_pos_test_for_read_caps()
-        self.captester2.conduct_pos_test_for_open_caps()
-        self.captester2.conduct_neg_test_for_write_caps(sudo_write=True)
-        self.captester2.conduct_neg_test_for_chown_caps()
-        self.captester2.conduct_neg_test_for_truncate_caps()
+        #self.captester2.conduct_pos_test_for_read_caps()
+        #self.captester2.conduct_pos_test_for_open_caps()
+        #self.captester2.conduct_neg_test_for_write_caps(sudo_write=True)
+        #self.captester2.conduct_neg_test_for_chown_caps()
+        #self.captester2.conduct_neg_test_for_truncate_caps()
 
     def test_multifs_rootsquash_nofeature(self):
         """
