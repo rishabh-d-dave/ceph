@@ -1303,23 +1303,48 @@ bool MgrMonitor::prepare_command(MonOpRequestRef op)
   } else if (prefix == "mgr module disable") {
     string module;
     cmd_getval(cmdmap, "module", module);
+
+    bool confirmation_flag = false;
+    cmd_getval(cmdmap, "yes_i_really_mean_it", confirmation_flag);
+
     if (module.empty()) {
       r = -EINVAL;
       goto out;
     }
-    if (pending_map.get_always_on_modules().count(module) > 0) {
-      ss << "module '" << module << "' cannot be disabled (always-on)";
-      r = -EINVAL;
-      goto out;
+    if (module != "volumes") {
+      if (pending_map.get_always_on_modules().count(module) > 0) {
+	  ss << "module '" << module << "' cannot be disabled (always-on)";
+	  r = -EINVAL;
+	  goto out;
+	}
+
+      if (!pending_map.module_enabled(module)) {
+	ss << "module '" << module << "' is already disabled";
+	r = 0;
+	goto out;
+      }
+
+      if (!pending_map.modules.count(module)) {
+	ss << "module '" << module << "' is not enabled";
+      }
     }
-    if (!pending_map.module_enabled(module)) {
-      ss << "module '" << module << "' is already disabled";
-      r = 0;
-      goto out;
+
+    if (module == "volumes") {
+      if (!confirmation_flag) {
+	ss << "This is a potentially disruptive operation. If you are sure "
+	   << "that you wish to continue, run again with "
+	   << "--yes-i-really-mean-it";
+	r = -EPERM;
+	goto out;
+      }
+
+      dout(0) << __func__ << " removing module '" << module << "'" << dendl;
+      pending_map.force_disabled_modules.insert(module);
+    } else if (module != "volumes" && confirmation_flag) {
+      ss << "Confirmation flag is required only for disabling 'volumes' module";
     }
-    if (!pending_map.modules.count(module)) {
-      ss << "module '" << module << "' is not enabled";
-    }
+
+    dout(0) << "removing module " << module << "from pending_map.modules" << dendl;
     pending_map.modules.erase(module);
   } else {
     ss << "Command '" << prefix << "' not implemented!";

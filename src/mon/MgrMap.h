@@ -297,6 +297,9 @@ public:
   // active version.
   std::map<uint32_t, std::set<std::string>> always_on_modules;
 
+  /* Modules which are always-on but has bene force-disabled by user. */
+  std::set<std::string> force_disabled_modules;
+
   // Modules which are reported to exist
   std::vector<ModuleInfo> available_modules;
 
@@ -421,6 +424,12 @@ public:
       return {};      // wth
     }
     return it->second;
+  }
+
+  void rm_from_always_on_modules(std::string module_name) {
+    for (auto& m: always_on_modules) {
+      m.second.erase(module_name);
+    }
   }
 
   void encode(ceph::buffer::list& bl, uint64_t features) const

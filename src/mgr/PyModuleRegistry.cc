@@ -243,6 +243,11 @@ void PyModuleRegistry::active_start(
       continue;
     }
 
+    if (mgr_map.force_disabled_modules.find(i.first) !=
+	mgr_map.force_disabled_modules.end()) {
+      continue;
+    }
+
     dout(4) << "Starting " << i.first << dendl;
     active_modules->start_one(i.second);
   }
