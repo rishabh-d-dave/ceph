@@ -262,8 +262,7 @@ class SubvolumeV2(SubvolumeV1):
 
         if vol_type == SubvolumeTypes.TYPE_NORMAL:
             return {op_type for op_type in SubvolumeOpType} - {SubvolumeOpType.CLONE_STATUS,
-                                                               SubvolumeOpType.CLONE_CANCEL,
-                                                               SubvolumeOpType.CLONE_INTERNAL}
+                                                               SubvolumeOpType.CLONE_CANCEL}
 
         return {}
 
@@ -282,7 +281,8 @@ class SubvolumeV2(SubvolumeV1):
                 SubvolumeOpType.SNAP_INFO,
                 SubvolumeOpType.SNAP_PROTECT,
                 SubvolumeOpType.SNAP_UNPROTECT,
-                SubvolumeOpType.CLONE_SOURCE
+                SubvolumeOpType.CLONE_SOURCE,
+                SubvolumeOpType.CLONE_INTERNAL,
             }
 
         return {SubvolumeOpType.REMOVE_FORCE,
