@@ -58,7 +58,7 @@ def open_at_group_unique(mgr, fs_handle, volspec, s_groupname, s_subvolname, c_s
         yield c_subvolume
     else:
         with open_subvol_in_group(mgr, fs_handle, volspec, s_groupname,
-                                  s_subvolname, op_type) as s_subvolume:
+                                  s_subvolname, op_type) as (_, s_subvolume):
             yield s_subvolume
 
 def get_clone_state(fs_client, volspec, volname, groupname, subvolname):
