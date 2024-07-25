@@ -137,7 +137,7 @@ class CloneProgressReporter:
             resolve_group_and_subvolume_name(self.vol_spec, dst_subvol_base_path)
         with open_subvol_in_vol(self.volclient, self.vol_spec, ci.volname,
                                 ci.dst_group_name, ci.dst_subvol_name,
-                                SubvolumeOpType.CLONE_INTERNAL) \
+                                SubvolumeOpType.CLONE_STATUS) \
                                 as (_, _, dst_subvol):
             ci.dst_path = dst_subvol.path
             log.debug(f'destination subvolume path for clone - {ci.dst_path}')
