@@ -10,6 +10,7 @@ from .pin_util import pin
 from .template import GroupTemplate
 from ..fs_util import listdir, listsnaps, get_ancestor_xattr, create_base_dir, has_subdir
 from ..exception import VolumeException
+from .template import SubvolumeOpType
 
 log = logging.getLogger(__name__)
 
@@ -20,10 +21,18 @@ class Group(GroupTemplate):
     NO_GROUP_NAME = "_nogroup"
 
     def __init__(self, fs, vol_spec, groupname):
-        if groupname == Group.NO_GROUP_NAME:
-            raise VolumeException(-errno.EPERM, "Operation not permitted for group '{0}' as it is an internal group.".format(groupname))
         if groupname in vol_spec.INTERNAL_DIRS:
-            raise VolumeException(-errno.EINVAL, "'{0}' is an internal directory and not a valid group name.".format(groupname))
+            if groupname == Group.NO_GROUP_NAME:
+                if SubvolumeOpType.CLONE_INTERNAL:
+                    log.debug('Let "_nogroup" group be opened in case of CLONE_INTERNAL since '
+                              'ceph fs clone status" will need to do so when source of a clone '
+                              'log.debug# is a subvolume in "_nogroup" group.')
+                    pass
+                else:
+                    raise VolumeException(-errno.EPERM, "Operation not permitted for group '{0}' as it is an internal group.".format(groupname))
+            else:
+                raise VolumeException(-errno.EINVAL, "'{0}' is an internal directory and not a valid group name.".format(groupname))
+
         self.fs = fs
         self.user_id = None
         self.group_id = None

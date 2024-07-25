@@ -207,8 +207,7 @@ class SubvolumeV1(SubvolumeBase, SubvolumeTemplate):
 
         if vol_type == SubvolumeTypes.TYPE_NORMAL:
             return {op_type for op_type in SubvolumeOpType} - {SubvolumeOpType.CLONE_STATUS,
-                                                               SubvolumeOpType.CLONE_CANCEL,
-                                                               SubvolumeOpType.CLONE_INTERNAL}
+                                                               SubvolumeOpType.CLONE_CANCEL}
 
         return {}
 
