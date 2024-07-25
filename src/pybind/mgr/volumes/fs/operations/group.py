@@ -23,7 +23,7 @@ class Group(GroupTemplate):
     def __init__(self, fs, vol_spec, groupname, op_type=None):
         if groupname in vol_spec.INTERNAL_DIRS:
             if groupname == Group.NO_GROUP_NAME:
-                if op_type != SubvolumeOpType.CLONE_STATUS:
+                if op_type not in (SubvolumeOpType.CLONE_STATUS, SubvolumeOpType.CLONE_SOURCE):
                     raise VolumeException(-errno.EPERM, "Operation not permitted for group '{0}' as it is an internal group.".format(groupname))
                 else:
                     log.debug(f'Letting "_nogroup" group be opened for op type "{op_type}"')
