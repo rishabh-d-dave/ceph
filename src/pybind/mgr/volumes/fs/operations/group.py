@@ -20,13 +20,13 @@ class Group(GroupTemplate):
     # that are not assigned to a group (i.e. created with group=None)
     NO_GROUP_NAME = "_nogroup"
 
-    def __init__(self, fs, vol_spec, groupname):
+    def __init__(self, fs, vol_spec, groupname, op_type=None):
         if groupname in vol_spec.INTERNAL_DIRS:
             if groupname == Group.NO_GROUP_NAME:
-                if SubvolumeOpType.CLONE_INTERNAL:
+                if op_type == SubvolumeOpType.CLONE_INTERNAL:
                     log.debug('Let "_nogroup" group be opened in case of CLONE_INTERNAL since '
-                              'ceph fs clone status" will need to do so when source of a clone '
-                              'log.debug# is a subvolume in "_nogroup" group.')
+                              '"ceph fs clone status" will need to do so when source of a clone '
+                              'is a subvolume in "_nogroup" group.')
                     pass
                 else:
                     raise VolumeException(-errno.EPERM, "Operation not permitted for group '{0}' as it is an internal group.".format(groupname))
@@ -285,13 +285,16 @@ def remove_group(fs, vol_spec, groupname):
 
 
 @contextmanager
-def open_group(fs, vol_spec, groupname):
+def open_group(fs, vol_spec, groupname, op_type=None):
     """
     open a subvolume group. This API is to be used as a context manager.
 
     :param fs: ceph filesystem handle
     :param vol_spec: volume specification
     :param groupname: subvolume group name
+    :param op_type: pass SubvolumeOpType value, this is only needed when to
+        create clone progress report (by "ceph fs clone status command") for
+        a clone that is located in group "_nogroup"
     :return: yields a group object (subclass of GroupTemplate)
     """
     group = Group(fs, vol_spec, groupname)
