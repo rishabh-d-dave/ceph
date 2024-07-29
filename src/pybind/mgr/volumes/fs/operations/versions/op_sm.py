@@ -40,6 +40,12 @@ class SubvolumeOpSm(object):
         return state == SubvolumeOpSm.get_init_state(stm_type)
 
     @staticmethod
+    def is_retained_state(state):
+        if not isinstance(state, SubvolumeStates):
+            raise OpSmException(-errno.EINVAL, f"unknown state '{state}'")
+        return state == SubvolumeStates.STATE_RETAINED
+
+    @staticmethod
     def get_init_state(stm_type):
         if not isinstance(stm_type, SubvolumeTypes):
             raise OpSmException(-errno.EINVAL, "unknown state machine '{0}'".format(stm_type))

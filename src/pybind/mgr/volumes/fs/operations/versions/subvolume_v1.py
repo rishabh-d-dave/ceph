@@ -692,6 +692,10 @@ class SubvolumeV1(SubvolumeBase, SubvolumeTemplate):
         subvolume_status = {'state' : state.value}
 
         if subvolume_type == SubvolumeTypes.TYPE_CLONE:
+            if SubvolumeOpSm.is_retained_state(state):
+                raise VolumeException(-errno.ENOENT,
+                    f'subvolume "{self.subvolname}" is removed and has only '
+                     'snapshots retained')
             if not SubvolumeOpSm.is_complete_state(state):
                 subvolume_status["source"] = self._get_clone_source()
             if SubvolumeOpSm.is_failed_state(state):
