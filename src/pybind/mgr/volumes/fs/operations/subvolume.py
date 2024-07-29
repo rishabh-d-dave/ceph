@@ -90,7 +90,7 @@ def open_subvol_in_vol(vc, vol_spec, vol_name, group_name, subvol_name,
 @contextmanager
 def open_subvol_in_group(mgr, vol_handle, vol_spec, group_name, subvol_name,
                          op_type, lockless=False):
-    with open_group(vol_handle, vol_spec, group_name) as group:
+    with open_group(vol_handle, vol_spec, group_name, op_type) as group:
         with open_subvol(mgr, vol_handle, vol_spec, group, subvol_name,
                          op_type) as subvol:
             yield subvol
