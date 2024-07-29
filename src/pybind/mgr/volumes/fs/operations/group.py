@@ -23,7 +23,7 @@ class Group(GroupTemplate):
     def __init__(self, fs, vol_spec, groupname, op_type=None):
         if groupname in vol_spec.INTERNAL_DIRS:
             if groupname == Group.NO_GROUP_NAME:
-                if op_type == SubvolumeOpType.CLONE_STATUS:
+                if op_type in (SubvolumeOpType.CLONE_STATUS, SubvolumeOpType.CLONE_SOURCE):
                     log.debug('Let "_nogroup" group be opened in case of CLONE_INTERNAL since '
                               '"ceph fs clone status" will need to do so when source of a clone '
                               'is a subvolume in "_nogroup" group.')
