@@ -10,6 +10,7 @@ from .pin_util import pin
 from .template import GroupTemplate
 from ..fs_util import listdir, listsnaps, get_ancestor_xattr, create_base_dir, has_subdir
 from ..exception import VolumeException
+from .template import SubvolumeOpType
 
 log = logging.getLogger(__name__)
 
@@ -19,11 +20,19 @@ class Group(GroupTemplate):
     # that are not assigned to a group (i.e. created with group=None)
     NO_GROUP_NAME = "_nogroup"
 
-    def __init__(self, fs, vol_spec, groupname):
-        if groupname == Group.NO_GROUP_NAME:
-            raise VolumeException(-errno.EPERM, "Operation not permitted for group '{0}' as it is an internal group.".format(groupname))
+    def __init__(self, fs, vol_spec, groupname, op_type=None):
         if groupname in vol_spec.INTERNAL_DIRS:
-            raise VolumeException(-errno.EINVAL, "'{0}' is an internal directory and not a valid group name.".format(groupname))
+            if groupname == Group.NO_GROUP_NAME:
+                if op_type == SubvolumeOpType.CLONE_STATUS:
+                    log.debug('Let "_nogroup" group be opened in case of CLONE_INTERNAL since '
+                              '"ceph fs clone status" will need to do so when source of a clone '
+                              'is a subvolume in "_nogroup" group.')
+                    pass
+                else:
+                    raise VolumeException(-errno.EPERM, "Operation not permitted for group '{0}' as it is an internal group.".format(groupname))
+            else:
+                raise VolumeException(-errno.EINVAL, "'{0}' is an internal directory and not a valid group name.".format(groupname))
+
         self.fs = fs
         self.user_id = None
         self.group_id = None
@@ -276,16 +285,19 @@ def remove_group(fs, vol_spec, groupname):
 
 
 @contextmanager
-def open_group(fs, vol_spec, groupname):
+def open_group(fs, vol_spec, groupname, op_type=None):
     """
     open a subvolume group. This API is to be used as a context manager.
 
     :param fs: ceph filesystem handle
     :param vol_spec: volume specification
     :param groupname: subvolume group name
+    :param op_type: pass SubvolumeOpType value, this is only needed when to
+        create clone progress report (by "ceph fs clone status command") for
+        a clone that is located in group "_nogroup"
     :return: yields a group object (subclass of GroupTemplate)
     """
-    group = Group(fs, vol_spec, groupname)
+    group = Group(fs, vol_spec, groupname, op_type)
     try:
         st = fs.stat(group.path)
         group.uid = int(st.st_uid)
