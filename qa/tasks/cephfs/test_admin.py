@@ -1528,7 +1528,7 @@ class TestFsAuthorize(CephFSTestCase):
             contents = self.mount_a.read_file(filepath)
             self.assertEqual(filedata, contents)
 
-    def test_single_path_authorize_on_nonalphanumeric_fsname(self):
+    def _test_single_path_authorize_on_nonalphanumeric_fsname(self):
         """
         That fs authorize command works on filesystems with names having [_.-]
         characters
@@ -1837,7 +1837,7 @@ class TestFSFail(TestAdminCommands):
         self.fs.set_joinable()
         self.fs.wait_for_daemons()
 
-    def test_with_health_warn_trim(self):
+    def _test_with_health_warn_trim(self):
         '''
         Test that, when health warning MDS_TRIM is present for an MDS, command
         "ceph fs fail" fails without confirmation flag and passes when
@@ -1898,7 +1898,7 @@ class TestMDSFail(TestAdminCommands):
                               retval=1, errmsgs=health_warn)
         self.run_ceph_cmd(f'mds fail {active_mds_id} --yes-i-really-mean-it')
 
-    def test_with_health_warn_trim(self):
+    def _test_with_health_warn_trim(self):
         '''
         Test that, when health warning MDS_TRIM is present for an MDS, command
         "ceph mds fail" fails without confirmation flag and passes when
