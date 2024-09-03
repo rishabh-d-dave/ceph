@@ -4,6 +4,8 @@ import logging
 import threading
 import traceback
 from collections import deque
+from copy import deepcopy
+
 from mgr_util import lock_timeout_log, CephfsClient
 
 from .operations.volume import list_volumes
@@ -35,6 +37,13 @@ class JobThread(threading.Thread):
         while retries < JobThread.MAX_RETRIES_ON_EXCEPTION:
             vol_job = None
             try:
+                if not self.async_job.run_event.is_set():
+                    log.info('will wait for run_event to bet set. postponing '
+                             'getting jobs until then')
+                    self.async_job.run_event.wait()
+                    log.info('run_event has been set, waiting is complete. '
+                             'proceeding to get jobs now')
+
                 # fetch next job to execute
                 with lock_timeout_log(self.async_job.lock):
                     while True:
@@ -42,6 +51,7 @@ class JobThread(threading.Thread):
                             log.info("thread [{0}] terminating due to reconfigure".format(thread_name))
                             self.async_job.threads.remove(self)
                             return
+
                         timo = self.async_job.wakeup_timeout
                         if timo is not None:
                             volnames = list_volumes(self.vc.mgr)
@@ -49,10 +59,17 @@ class JobThread(threading.Thread):
                             for m in missing:
                                 self.async_job.jobs[m] = []
                                 self.async_job.q.append(m)
+
+                        if not self.async_job.run_event.is_set():
+                            break
+
                         vol_job = self.async_job.get_job()
                         if vol_job:
                             break
                         self.async_job.cv.wait(timeout=timo)
+
+                    if not self.async_job.run_event.is_set():
+                        continue
                     self.async_job.register_async_job(vol_job[0], vol_job[1], thread_id)
 
                 # execute the job (outside lock)
@@ -129,6 +146,11 @@ class AsyncJobs(threading.Thread):
         self.waiting = False
         self.stopping = threading.Event()
         self.cancel_cv = threading.Condition(self.lock)
+
+        self.run_event = threading.Event()
+        # let async threads run by default
+        self.run_event.set()
+
         self.nr_concurrent_jobs = nr_concurrent_jobs
         self.name_pfx = name_pfx
         # each async job group uses its own libcephfs connection (pool)
@@ -136,10 +158,20 @@ class AsyncJobs(threading.Thread):
         self.wakeup_timeout = None
 
         self.threads = []
-        for i in range(self.nr_concurrent_jobs):
-            self.threads.append(JobThread(self, volume_client, name="{0}.{1}".format(self.name_pfx, i)))
-            self.threads[-1].start()
+        self.spawn_all_threads()
         self.start()
+
+    def spawn_new_thread(self, suffix):
+        t_name = f'{self.name_pfx}.{suffix}'
+        log.debug(f'creating new thread {t_name}')
+        t = JobThread(self, self.vc, t_name)
+        t.start()
+        self.threads.append(t)
+
+    def spawn_all_threads(self):
+        assert self.threads == []
+        for i in range(self.nr_concurrent_jobs):
+            self.spawn_new_thread(i)
 
     def set_wakeup_timeout(self):
         with self.lock:
@@ -165,9 +197,32 @@ class AsyncJobs(threading.Thread):
                     # Increase concurrency: create more threads.
                     log.debug("creating new threads to job increase")
                     for i in range(c, self.nr_concurrent_jobs):
-                        self.threads.append(JobThread(self, self.vc, name="{0}.{1}.{2}".format(self.name_pfx, time.time(), i)))
-                        self.threads[-1].start()
+                        if not self.run_event.is_set():
+                            break
+                        self.spawn_new_thread(i)
                 self.cv.wait(timeout=5)
+
+    def pause(self):
+        self.run_event.clear()
+
+        self.saved_q = deepcopy(self.q)
+        log.info('pause() saved jobs, cancelling jobs now...')
+        self.cancel_all_jobs()
+        log.info('pause() all jobs cancelled, returning')
+
+    def resume(self):
+        if self.run_event.is_set():
+            log.info('resume() no need to resume, run_event is already set.')
+            return
+
+        self.q.extendleft(self.saved_q)
+        log.debug('resume() reinstated queue. self.q = {self.q}')
+        for volname in self.q:
+            self.jobs[volname] = []
+        log.debug(f'resume() reinstated jobs. self.jobs = {self.jobs}')
+
+        self.run_event.set()
+        log.debug(f'resume() run_even has been set.')
 
     def shutdown(self):
         self.stopping.set()
@@ -183,6 +238,10 @@ class AsyncJobs(threading.Thread):
         self.nr_concurrent_jobs = nr_concurrent_jobs
 
     def get_job(self):
+        if not self.run_event.is_set():
+            log.info('no need to get new jobs, run_event is not set')
+            return None
+
         log.debug("processing {0} volume entries".format(len(self.q)))
         nr_vols = len(self.q)
         to_remove = []
@@ -213,8 +272,10 @@ class AsyncJobs(threading.Thread):
             nr_vols -= 1
         for vol in to_remove:
             log.debug("auto removing volume '{0}' from tracked volumes".format(vol))
-            self.q.remove(vol)
-            self.jobs.pop(vol)
+            if vol in self.q:
+                self.q.remove(vol)
+            if vol in self.jobs:
+                self.jobs.pop(vol)
         return next_job
 
     def register_async_job(self, volname, job, thread_id):
