@@ -573,9 +573,9 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
                         self.vc.cloner.reconfigure_reject_clones(self.snapshot_clone_no_wait)
                     elif opt['name'] == "pause_purging_trash":
                         if self.pause_purging_trash:
-                            self.vc.purge_queue.pause_purging()
+                            self.vc.purge_queue.pause()
                         else:
-                            self.vc.purge_queue.resume_purging()
+                            self.vc.purge_queue.resume()
 
     def handle_command(self, inbuf, cmd):
         handler_name = "_cmd_" + cmd['prefix'].replace(" ", "_")

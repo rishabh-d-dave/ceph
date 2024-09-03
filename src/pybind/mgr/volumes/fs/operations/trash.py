@@ -51,14 +51,12 @@ class Trash(GroupTemplate):
         """
         return self._get_single_dir_entry(exclude_list)
 
-    def purge(self, trashpath, should_cancel, should_purge):
+    def purge(self, trashpath, should_cancel):
         """
         purge a trash entry.
 
         :praram trash_entry: the trash entry to purge
         :praram should_cancel: callback to check if the purge should be aborted
-        :param should_purge: threading.Event instance that tells whether
-                             purging should pause or continue
         :return: None
         """
         def rmtree(root_path):
@@ -67,12 +65,6 @@ class Trash(GroupTemplate):
                 with self.fs.opendir(root_path) as dir_handle:
                     d = self.fs.readdir(dir_handle)
                     while d and not should_cancel():
-                        # should_purge is threading.Event instance that is set
-                        # when purge threads should run and unset/clear purge
-                        # threads should pause. Pausing happens using this
-                        # wait() method.
-                        should_purge.wait()
-
                         if d.d_name not in (b".", b".."):
                             d_full = os.path.join(root_path, d.d_name)
                             if d.is_dir():
