@@ -118,7 +118,6 @@ class CloneProgressReporter:
         # progress event ID for ongoing+pending clone jobs
         self.onpen_pev_id: Optional[str] = 'mgr-vol-total-clones'
 
-        self.update_task = RTimer(1, self._update_progress_bars)
         self.update_task.start()
         log.info('progress reporting for clones has been initiated')
 
