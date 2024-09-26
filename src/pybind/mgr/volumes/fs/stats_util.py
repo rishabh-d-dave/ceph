@@ -8,6 +8,9 @@ conveniently.
 from os.path import join as os_path_join
 from typing import Optional
 from logging import getLogger
+from time import sleep
+from threading import Thread, Event
+from traceback import format_exception as traceback_format_exception
 
 from .operations.volume import open_volume_lockless, list_volumes
 from .operations.subvolume import open_clone_subvol_pair_in_vol, open_subvol_in_vol
@@ -88,6 +91,53 @@ class CloneInfo:
         self.dst_path = None
 
 
+class RepeatTask(Thread):
+
+    def __init__(self, interval, func):
+        super().__init__(name='clone-stats')
+
+        self.interval = interval
+        self.func = func
+
+        self.finished = Event()
+        self.finished.clear()
+
+        self.run_event = Event()
+        self.run_event.set()
+
+        self.terminate_after_interval = 5
+
+    def _run(self):
+        while not self.finished.is_set():
+            sleep(self.interval)
+            self.func()
+            self.pause_if_set()
+
+    def run(self):
+        try:
+            self._run()
+        except Exception as e:
+            log.error(f'following exception was raised - {traceback_format_exception()}')
+
+    def pause_if_set(self, timeout=0):
+        flag = self.run_event.wait(timeout=timeout)
+
+        if not flag: # this means wait didn't abort due to event being
+                     # set but due to timeout
+            self.set_terminate()
+
+        return flag
+
+    def set_pause(self):
+        self.run_event.clear()
+
+    def set_resume(self):
+        self.run_event.set()
+
+    def set_terminate(self):
+        self.finished.set()
+
+
 class CloneProgressReporter:
 
     def __init__(self, volclient, vol_spec):
@@ -104,7 +154,8 @@ class CloneProgressReporter:
 
         # Creating an RTimer instance in advance so that we can check if clone
         # reporting has already been initiated by calling RTimer.is_alive().
-        self.update_task = RTimer(1, self._update_progress_bars)
+        self.update_task = RepeatTask(1, self._update_progress_bars)
+        log.info('here123 created RTimer instance')
 
     def initiate_reporting(self):
         if self.update_task.is_alive():
@@ -118,6 +169,7 @@ class CloneProgressReporter:
         # progress event ID for ongoing+pending clone jobs
         self.onpen_pev_id: Optional[str] = 'mgr-vol-total-clones'
 
+        log.info(f'here123 self.update_task.is_alive() = {self.update_task.is_alive()}')
         self.update_task.start()
         log.info('progress reporting for clones has been initiated')
 
@@ -307,4 +359,4 @@ class CloneProgressReporter:
         self._finish_progress_events()
 
         log.info(f'marking this RTimer thread as finished; thread object ID - {self}')
-        self.update_task.finished.set()
+        self.update_task.set_terminate()
