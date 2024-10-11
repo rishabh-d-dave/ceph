@@ -4409,7 +4409,7 @@ class TestPausePurging(TestVolumesHelper):
 
         # ensure purge threads have no jobs left from previous test so that
         # next test doesn't have to face unnecessary complications.
-        self.wait_for_trashcan_to_be_empty()
+        self._wait_for_trash_empty()
 
         super().tearDown()
 
@@ -4541,7 +4541,7 @@ class TestPausePurging(TestVolumesHelper):
 
         # XXX actual test here: test that unpurged subvol is purged
         self.config_set('mgr', self.conf_opt, False)
-        self.wait_for_trashcan_to_be_empty()
+        self._wait_for_trash_empty()
 
     def _get_trashed_sv_path(self, sv, sv_path):
         uuid = self.mount_a.get_shell_stdout('sudo ls volumes/_deleting').\
@@ -4608,7 +4608,7 @@ class TestPausePurging(TestVolumesHelper):
 
         # XXX actual test here: test that purging is resumed and finished
         self.config_set('mgr', self.conf_opt, False)
-        self.wait_for_trashcan_to_be_empty()
+        self._wait_for_trash_empty()
 
     def test_the_default_value(self):
         '''
@@ -4635,7 +4635,7 @@ class TestPausePurging(TestVolumesHelper):
         self._do_subvolume_io(sv, number_of_files=10)
 
         self.run_ceph_cmd(f'fs subvolume rm {v} {sv}')
-        self.wait_for_trashcan_to_be_empty()
+        self._wait_for_trash_empty()
 
 
 class TestSubvolumeGroupSnapshots(TestVolumesHelper):
