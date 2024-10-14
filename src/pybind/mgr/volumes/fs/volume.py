@@ -1164,7 +1164,9 @@ class VolumeClient(CephfsClient["Module"]):
                     {'state': 'ongoing',
                      'progress_report':
                          {'amount_purged': {},
-                          'percentage_purged': {}}}}
+                          'percentage_purged': {},
+                          'purge_rate': 'N/A'}}}
+
         amount_purged = status['status']['progress_report']\
             ['amount_purged'] # type: ignore
         percent_purged = status['status']['progress_report']\
@@ -1177,6 +1179,10 @@ class VolumeClient(CephfsClient["Module"]):
         percent_purged['subvols'] = f'{subvols_purged_percent}%'
         percent_purged['files'] = f'{files_purged_percent}%'
         percent_purged['size'] = f'{size_purged_percent}%'
+
+        if self.purge_queue.purge_rate:
+            purge_rate_msg = f'{self.purge_queue.purge_rate} unlink+rmdir per sec'
+            status['status']['progress_report']['purge_rate'] = purge_rate_msg # type: ignore
 
         log.debug(f'purge status - {status}')
         return status
