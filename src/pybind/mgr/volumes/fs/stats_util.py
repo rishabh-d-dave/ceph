@@ -15,6 +15,7 @@ from .operations.template import SubvolumeOpType
 from .operations.clone_index import open_clone_index, PATH_MAX
 from .operations.resolver import resolve_group_and_subvolume_name
 from .exception import VolumeException
+from .fs_util import listdir
 
 from mgr_util import RTimer, format_bytes, format_dimless
 from cephfs import ObjectNotFound
@@ -220,6 +221,18 @@ class CloneProgressReporter:
 
         log.debug('call to update() from mgr/update module was successful')
 
+    @property
+    def ongoing_clones_count(self):
+        volnames = list_volumes(self.volclient.mgr)
+        for volname in volnames:
+            with open_volume_lockless(self.volclient, volname) as fs_handle:
+                with open_clone_index(fs_handle, self.vol_spec) as clone_index:
+                    count = len(listdir(fs_handle, clone_index.path))
+                    if count < 1:
+                        count = 1
+                    log.debug(f'here123 ongoing clones count figured by CloneProgressReporter = {count} {clone_index.path}')
+                    return count
+
     def _update_progress_bars(self):
         '''
         Look for amount of progress made by all cloning operations and prints
@@ -237,7 +250,7 @@ class CloneProgressReporter:
         # onpen bar (that is progress bar for clone jobs in ongoing and pending
         # state) is printed when clones are in pending state. it is kept in
         # printing until all clone jobs finish.
-        show_onpen_bar = True if len(clones) > self.max_concurrent_clones \
+        show_onpen_bar = True if len(clones) > self.ongoing_clones_count \
             else False
 
         percent = 0.0
@@ -245,7 +258,7 @@ class CloneProgressReporter:
         assert self.on_pev_id is not None
         sum_percent_ongoing = 0.0
         avg_percent_ongoing = 0.0
-        total_ongoing_clones = min(len(clones), self.max_concurrent_clones)
+        total_ongoing_clones = min(len(clones), self.ongoing_clones_count)
 
         if show_onpen_bar:
             assert self.onpen_pev_id is not None
