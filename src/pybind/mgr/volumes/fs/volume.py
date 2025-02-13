@@ -230,23 +230,21 @@ class VolumeClient(CephfsClient["Module"]):
 
     ### subvolume operations
 
-    def _create_subvolume(self, fs_handle, volname, group, subvolname, **kwargs):
-        size       = kwargs['size']
-        pool       = kwargs['pool_layout']
-        uid        = kwargs['uid']
-        gid        = kwargs['gid']
-        mode       = kwargs['mode']
-        isolate_nspace = kwargs['namespace_isolated']
-        earmark    = kwargs['earmark'] or ''  # if not set, default to empty string --> no earmark
-        normalization = kwargs['normalization']
-        casesensitive = kwargs['casesensitive']
-        enctag = kwargs['enctag'] or '' # if not set, default to empty string
+    def _create_subvol_incar(self, subvol, mode, attrs):
+        try;
+            subvol.create(mode, attrs)
+        except VolumeException as e:
+            # kick the purge threads for async removal -- note that this
+            # assumes that the subvolume is moved to trashcan for cleanup on
+            # error.
+            self.purge_queue.queue_job(volname)
+            raise ve
 
-        oct_mode = octal_str_to_decimal_int(mode)
-
+    def _create_new_subvol(self, fs_handle, volname, group, subvolname, mode,
+                          attrs):
         try:
-            create_subvol(
-                self.mgr, fs_handle, self.volspec, group, subvolname, size, isolate_nspace, pool, oct_mode, uid, gid, earmark, normalization, casesensitive, enctag)
+            create_subvol(self.mgr, fs_handle, self.volspec, group, subvolname,
+                          mode, attrs)
         except VolumeException as ve:
             # kick the purge threads for async removal -- note that this
             # assumes that the subvolume is moved to trashcan for cleanup on error.
@@ -263,34 +261,30 @@ class VolumeClient(CephfsClient["Module"]):
         uid        = kwargs['uid']
         gid        = kwargs['gid']
         mode       = kwargs['mode']
-        isolate_nspace = kwargs['namespace_isolated']
+        isolate_ns = kwargs['namespace_isolated']
         earmark    = kwargs['earmark'] or ''  # if not set, default to empty string --> no earmark
         normalization = kwargs['normalization']
         casesensitive = kwargs['casesensitive']
         enctag    = kwargs['enctag'] or ''  # if not set, default to empty string --> no encryption tag
+
+        mode = octal_str_to_decimal_int(mode)
+        attrs = {'uid': uid, 'gid': gid, 'data_pool': pool,'quota': size,
+                 'earmark': earmark, 'enctag': enctag,
+                 'normalization': normalization, 'casesensitive': casesensitive,
+                 'pool_namespace': subvolume.namespace if isolate_ns else None}
 
         try:
             with open_volume(self, volname) as fs_handle:
                 with open_group(fs_handle, self.volspec, groupname) as group:
                     try:
                         with open_subvol(self.mgr, fs_handle, self.volspec, group, subvolname, SubvolumeOpType.CREATE) as subvolume:
-                            # idempotent creation -- valid. Attributes set is supported.
-                            attrs = {
-                                'uid': uid if uid else subvolume.uid,
-                                'gid': gid if gid else subvolume.gid,
-                                'mode': octal_str_to_decimal_int(mode),
-                                'data_pool': pool,
-                                'pool_namespace': subvolume.namespace if isolate_nspace else None,
-                                'quota': size,
-                                'earmark': earmark,
-                                'normalization': normalization,
-                                'casesensitive': casesensitive,
-                                'enctag': enctag,
-                            }
-                            subvolume.set_attrs(subvolume.path, attrs)
+                            attrs['uid'] = uid if uid else subvolume.uid
+                            attrs['gid'] = gid if gid else subvolume.gid
+                            self._create_subvol_incar(subvol, mode, attrs)
                     except VolumeException as ve:
                         if ve.errno == -errno.ENOENT:
-                            self._create_subvolume(fs_handle, volname, group, subvolname, **kwargs)
+                            self._create_new_subvol(fs_handle, volname, group,
+                                                    subvolname, mode, attrs)
                         else:
                             raise
         except VolumeException as ve:
