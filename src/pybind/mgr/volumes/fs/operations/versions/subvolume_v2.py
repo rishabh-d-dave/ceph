@@ -174,7 +174,7 @@ class SubvolumeV2(SubvolumeV1):
             self.init_config(self.VERSION, subvol_type, uuid_path,
                              initial_state)
 
-    def _create(self, mode, attrs, subvol_type, auth=True):
+    def _create(self, attrs, subvol_type, auth=True):
         if self.retained and self.has_pending_purges:
             raise VolumeException(-errno.EAGAIN, "asynchronous purge of subvolume in progress")
 
@@ -182,6 +182,7 @@ class SubvolumeV2(SubvolumeV1):
         self.uuid = gen_uuid()
         uuid_path = safe_join(self.base_path, self.uuid)
 
+        mode = attrs.pop('mode')
         # create group directory with default mode(0o755) if it doesn't exist.
         create_base_dir(self.fs, self.group.path, self.vol_spec.DEFAULT_MODE)
         self.fs.mkdirs(uuid_path, mode)
@@ -195,9 +196,9 @@ class SubvolumeV2(SubvolumeV1):
             self.auth_mdata_mgr.create_subvolume_metadata_file(
                 self.group.groupname, self.subvolname)
 
-    def create(self, mode, attrs):
+    def create(self, attrs):
         try:
-            self._create(mode, attrs, SubvolumeTypes.TYPE_NORMAL)
+            self._create(attrs, SubvolumeTypes.TYPE_NORMAL)
         except (VolumeException, MetadataMgrException, cephfs.Error) as e:
             try:
                 self._cleanup_on_creation_failure()

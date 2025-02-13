@@ -164,6 +164,7 @@ class AuthMetadataManager(object):
         Create a subvolume metadata file, if it does not already exist, to store
         data about auth ids having access to the subvolume
         """
+        subvol_name = to_str(subvol_name)
         fd = self.fs.open(self._subvolume_metadata_path(group_name, subvol_name),
                           os.O_CREAT, 0o755)
         self.fs.close(fd)
