@@ -10,6 +10,7 @@ import uuid
 import cephfs
 
 from ..group import Group
+from ...utils import to_str
 from ...exception import VolumeException
 
 log = logging.getLogger(__name__)
