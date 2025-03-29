@@ -8,6 +8,7 @@ from .subvolume_v2 import SubvolumeV2
 from .subvolume_attrs import SubvolumeStates
 from .metadata_manager import MetadataManager
 from .auth_metadata import AuthMetadataManager
+from ..trash import create_trashcan, open_trashcan
 from ...utils import (gen_uuid, verify_uuid, safe_join, to_utf8, list_dir,
                       path_exists)
 from ...fs_util import listdirs, path_exists
@@ -241,8 +242,8 @@ class SubvolumeV3(SubvolumeV2):
         with open_trashcan(self.fs, self.spec) as trashcan:
             trashcan.dump(self.subvol_path)
 
-    # since there is not in-subvol ".trash" dir in subvol v3, this method
-    # should always return False
     @property
     def has_pending_purges(self):
+        # since there is not in-subvol ".trash" dir in subvol v3, this method
+        # should always return False
         return False
