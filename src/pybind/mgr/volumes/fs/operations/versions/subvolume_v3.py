@@ -252,7 +252,7 @@ class SubvolumeV3(SubvolumeV2):
 
 
     def snapshot_data_path(self, snapname):
-        snappath = join(self.snapshot_path(snapname), b'mnt')
+        snappath = self.snapshot_path(snapname)
 
         # v2 raises exception if the snapshot path do not exist so do the same
         # to prevent any bugs due to difference in behaviour.
