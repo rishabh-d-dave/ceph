@@ -5111,6 +5111,51 @@ class TestSubvolumeSnapshots(TestVolumesHelper):
         # verify trash dir is clean
         self._wait_for_trash_empty()
 
+    def get_subvol_uuid(self, subvol_name):
+        subvol_path = self.get_ceph_cmd_stdout(
+            f'fs subvolume getpath {self.volname} {subvol_name}').strip()
+        subvol_uuid = os.path.basename(subvol_path)
+        return subvol_uuid
+
+    def test_snapshot_getpath(self):
+        subvol_name = self._gen_subvol_name()
+        snap_name = self._gen_subvol_snap_name()
+
+        self.run_ceph_cmd(f'fs subvolume create {self.volname} {subvol_name}')
+        sv_uuid = self.get_subvol_uuid(subvol_name)
+        self.run_ceph_cmd(f'fs subvolume snapshot create {self.volname} '
+                          f'{subvol_name} {snap_name}')
+
+        snap_path = self.get_ceph_cmd_stdout(f'fs subvolume snapshot getpath '
+                                             f'{self.volname} {subvol_name} '
+                                             f'{snap_name}').strip()
+        group_name = '_nogroup'
+        # expected snapshot path
+        exp_snap_path = os.path.join('/volumes', group_name, subvol_name,
+                                     '.snap', snap_name, sv_uuid)
+        self.assertEqual(snap_path, exp_snap_path)
+
+    def test_snapshot_getpath_in_group(self):
+        subvol_name = self._gen_subvol_name()
+        group_name = self._gen_subvol_grp_name()
+        snap_name = self._gen_subvol_snap_name()
+
+        self.run_ceph_cmd(f'fs subvolumegroup create {self.volname} {group_name}')
+        self.run_ceph_cmd(f'fs subvolume create {self.volname} {subvol_name} '
+                          f'{group_name}')
+        self.run_ceph_cmd(f'fs subvolume snapshot create {self.volname} '
+                          f'{subvol_name} {snap_name} {group_name}')
+        sv_uuid = self.get_subvol_uuid(subvol_name)
+
+        snap_path = self.get_ceph_cmd_stdout(f'fs subvolume snapshot getpath '
+                                             f'{self.volname} {subvol_name} '
+                                             f'{snap_name} {group_name}')\
+                                             .strip()
+        # expected snapshot path
+        exp_snap_path = os.path.join('/volumes', group_name, subvol_name,
+                                     '.snap', snap_name, sv_uuid)
+        self.assertEqual(snap_path, exp_snap_path)
+
     def test_subvolume_snapshot_info(self):
 
         """
