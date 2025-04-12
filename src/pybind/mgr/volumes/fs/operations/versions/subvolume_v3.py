@@ -421,10 +421,9 @@ class SubvolumeV3(SubvolumeV2):
             if snap_name in self.list_snaps(path):
                 return uuid
 
-    # Listing all snaps can be expensive due to possibility of multiple snaps in
-    # multiple incarnations. This methods returns as soon as it finds the given
-    # snap instead of listing all snaps and then finding the given snap in the list.
-    # So, use this method, instead, for finding a snap.
+    # Listing all snaps to find one can be unncessary and also expensive due to
+    # possibility of multiple snaps in multiple incarnations. Therefore, use
+    # this method instead.
     def has_v3_snap(self, snap_name=None):
         if snap_name:
             uuid = self.get_v3_incar_of_snap(snap_name)
@@ -448,7 +447,7 @@ class SubvolumeV3(SubvolumeV2):
 
         SubvolumeV2.create_snapshot(self, snap_name)
 
-    def stat_subvol_data_path(self):
+    def stat_subvol_mnt_path(self):
         '''
         stat() path where data of subvol users is stored.
 
@@ -467,16 +466,17 @@ class SubvolumeV3(SubvolumeV2):
         if not (snap_path := self.get_snap_path(snap_name)):
             raise VolumeException(ENOENT, f'snap "{snap_name}" does not exist')
 
-        SubvolumeV2.remove_snapshot(self, snap_name, force)
-        if self.is_retained():
-            if not self.has_snap():
-                self.trash_base_dir()
-                return True
-        else:
-            uuid = basename(dirname(dirname(snap_path)))
-            if not self.has_v3_snap(uuid):
-                self.trash_incar_dir(uuid)
-                return True
+        super(SubvolumeV2, self).remove_snapshot(snap_name, force)
+
+        uuid = basename(dirname(dirname(snap_path)))
+        if self.is_incar_retained(uuid) and not self.has_v3_snap(uuid):
+            self.trash_uuid_dir(uuid)
+            return True
+
+        if len(self.get_v3_incars()) == 0:
+            self.trash_base_dir()
+            return True
+
         return False
 
     def has_snap(self, snap_name=None, uuid=None):
@@ -501,9 +501,40 @@ class SubvolumeV3(SubvolumeV2):
 
     # ----- methods for subvol removal while retaining snaps -----
 
+    def allowed_ops_by_state(self, vol_state):
+        if vol_state == SubvolumeStates.STATE_COMPLETE:
+            return {op_type for op_type in SubvolumeOpType}
+        elif vol_state == SubvolumeStates.STATE_RETAINED:
+            return {
+                SubvolumeOpType.CREATE, SubvolumeOpType.REMOVE,
+                SubvolumeOpType.REMOVE_FORCE, SubvolumeOpType.LIST,
+                SubvolumeOpType.INFO,
 
-    def is_incar_retained(self):
-        return False
+                SubvolumeOpType.SNAP_CREATE, SubvolumeOpType.SNAP_REMOVE,
+                SubvolumeOpType.SNAP_REMOVE_FORCE, SubvolumeOpType.SNAP_LIST,
+                SubvolumeOpType.SNAP_GETPATH, SubvolumeOpType.SNAP_INFO,
+                SubvolumeOpType.SNAP_PROTECT, SubvolumeOpType.SNAP_UNPROTECT,
+
+                SubvolumeOpType.CLONE_SOURCE, SubvolumeOpType.CLONE_FAILED
+            }
+        else:
+            return {SubvolumeOpType.REMOVE_FORCE, SubvolumeOpType.LIST,
+                    SubvolumeOpType.CLONE_CREATE, SubvolumeOpType.CLONE_STATUS,
+                    SubvolumeOpType.CLONE_CANCEL, SubvolumeOpType.CLONE_INTERNAL,
+                    SubvolumeOpType.CLONE_SOURCE, SubvolumeOpType.CLONE_FAILED}
+
+    def is_incar_retained(self, uuid):
+        if self.creating:
+            return False
+
+        if self.path_exists(self.gen_retained_path(uuid)):
+            return True
+        elif self.path_exists(self.gen_mnt_path(uuid)):
+            return False
+        else:
+            assert False, \
+                ('inar dir contains neither "mnt" nor "retained" dir, this '
+                 'should be impossible')
 
     def update_meta_file_after_retain(self):
         self.md.remove_section(self.md.USER_METADATA_SECTION)
