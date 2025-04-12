@@ -1,3 +1,4 @@
+#abcd
 from errno import *
 from os.path import basename
 from logging import getLogger
@@ -11,7 +12,7 @@ from .auth_metadata import AuthMetadataManager
 from ..trash import create_trashcan, open_trashcan
 from ...utils import (gen_uuid, verify_uuid, safe_join, to_utf8, list_dir,
                       path_exists)
-from ...fs_util import listdirs, path_exists
+from ...fs_util import listdirs, path_exists, list_snaps
 from ...exception import VolumeException, MetadataMgrException
 
 
