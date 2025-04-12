@@ -20,6 +20,7 @@ from ..snapshot_util import mksnap, rmsnap
 from ..access import allow_access, deny_access
 from ...exception import IndexException, OpSmException, VolumeException, MetadataMgrException, EvictionError
 from ...fs_util import listsnaps, is_inherited_snap, create_base_dir
+from ...utils import safe_join
 from ..template import SubvolumeOpType
 from ..group import Group
 from ..rankevicter import RankEvicter
@@ -710,8 +711,8 @@ class SubvolumeV1(SubvolumeBase, SubvolumeTemplate, V3Compat):
     def create_snapshot(self, snapname):
         try:
             group_snapshot_path = os.path.join(self.group.path,
-                                               self.vol_spec.snapshot_dir_prefix.encode('utf-8'),
-                                               snapname.encode('utf-8'))
+                                            self.vol_spec.snapshot_dir_prefix.encode('utf-8'),
+                                            snapname.encode('utf-8'))
             self.fs.stat(group_snapshot_path)
         except cephfs.Error as e:
             if e.args[0] == errno.ENOENT:
