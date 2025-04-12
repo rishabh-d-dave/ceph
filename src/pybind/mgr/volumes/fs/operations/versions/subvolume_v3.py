@@ -397,10 +397,9 @@ class SubvolumeV3(SubvolumeV2):
             if snap_name in self.list_snaps(path):
                 return uuid
 
-    # Listing all snaps can be expensive due to possibility of multiple snaps in
-    # multiple incarnations. This methods returns as soon as it finds the given
-    # snap instead of listing all snaps and then finding the given snap in the list.
-    # So, use this method, instead, for finding a snap.
+    # Listing all snaps to find one can be unncessary and also expensive due to
+    # possibility of multiple snaps in multiple incarnations. Therefore, use
+    # this method instead.
     def has_v3_snap(self, snap_name=None):
         if snap_name:
             uuid = self.get_v3_incar_of_snap(snap_name)
@@ -443,6 +442,13 @@ class SubvolumeV3(SubvolumeV2):
             # when subvol is present but it has no incars
             self.fs.stat(self.base_path)
 
+    def is_incar_retained(self, uuid):
+        subdirs = self.list_dirs(self.gen_incar_path(uuid))
+        assert len(subdirs) == 1,  \
+            f'subdirs = {subdirs}'
+
+        return (subdirs[0] in (RETAINED_DIR))
+
     def rm_snap(self, snap_name, force):
         # UUID can be none if snap is absent but don't raise any exception in
         # this case since command's behaviour is expected to be idempotent.
@@ -456,7 +462,7 @@ class SubvolumeV3(SubvolumeV2):
                 return True
         else:
             uuid = basename(dirname(dirname(snap_path)))
-            if not self.has_v3_snap(uuid):
+            if self.is_incar_retained(uuid) and not self.has_v3_snap(uuid):
                 self.trash_uuid_dir(uuid)
                 return True
         return False
