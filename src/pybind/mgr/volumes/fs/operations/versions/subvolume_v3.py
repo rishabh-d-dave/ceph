@@ -3,7 +3,7 @@ from errno import *
 from os.path import basename
 from logging import getLogger
 
-from cephfs import Error, InvalidValue
+from cephfs import Error, InvalidValue, ObjectNotFound
 
 from .subvolume_v2 import SubvolumeV2
 from .subvolume_attrs import SubvolumeStates
@@ -70,6 +70,9 @@ class PreV3Helper:
         # terms
         self.trash_subvol_dir()
 
+    def snapshot_base_path(self):
+        return self.get_incar_snap_base_path()
+
     def snapshot_path(self, snap_name):
         if snap_path := self.get_snap_path(snap_name):
             return snap_path
@@ -87,7 +90,27 @@ class PreV3Helper:
         raise VolumeException(ENOENT, f'snap "{snap_name}" does not exist')
 
     def snapshot_data_path(self, snap_name):
-        return self.get_snap_path(snap_name)
+        if snap_path := self.get_snap_path(snap_name):
+            return snap_path
+
+        # TODO
+        # v2 raises exception if the snapshot path do not exist so do the same
+        # to prevent any bugs due to difference in behaviour.
+        #
+        # not raising exception indeed leads to a bug: the volumes plugin fails
+        # when exception is not raised by this method when it is calld by
+        # do_clone() method of async_cloner.py. this is made to happen by a test
+        # by deleting snapshot after running the snapshot clone cmd but before
+        # the clone operation actually begins. this is done by a adding a delay
+        # using mgr/volumes/snapshot_clone_delay config option.
+        raise VolumeException(ENOENT, f'snap "{snap_name}" does not exist')
+
+    def list_snapshots(self):
+        '''
+        :return: list of snap names
+        :rtype: list of str
+        '''
+        return self.get_snap_names()
 
     def list_snapshots(self):
         '''
@@ -407,16 +430,18 @@ class SubvolumeV3(SubvolumeV2):
     # ----- methods for snap clone -----
 
 
-    def snapshot_data_path(self, snap_name):
+    def get_snap_path(self, snap_name):
         uuid = self.get_incar_uuid_for_snap(snap_name)
         if uuid == None:
             raise VolumeException(ENOENT, f'snap "{snap_name}" does not exist')
         elif uuid == self.uuid:
             snap_path = join(self.snapshot_path(snap_name), 'mnt')
+        elif uuid == self.uuid:
+            snap_path = safe_join(self.snapshot_path(snap_name), 'mnt')
         else:
-            snap_path = join(self.roots_dir, uuid,
-                             self.vol_spec.snapshot_dir_prefix.encode('utf-8'),
-                             snap_name.encode('utf-8'), b'mnt')
+            snap_path = safe_join(self.roots_dir, uuid,
+                                  to_utf8(self.spec.snap_base_dir),
+                                  to_utf8(snap_name), 'mnt')
 
         # v2 raises exception if the snapshot path do not exist so do the same
         # to prevent any bugs due to difference in behaviour.
@@ -429,12 +454,17 @@ class SubvolumeV3(SubvolumeV2):
         # adding a delay using mgr/volumes/snapshot_clone_delay config option.
         try:
             self.fs.stat(snap_path)
-        except cephfs.Error as e:
+        except ObjectNotFound as e:
             if abs(e.errno) == ENOENT:
-                raise VolumeException(ENOENT, f'snap "{snap_name}" does not exist')
+                raise VolumeException(ENOENT, f'snap "{snap_name}" does not '
+                                               'exist')
             raise VolumeException(e)
 
         return snap_path
+
+    @property
+    def purgeable(self):
+        return False if not self.retained or self.list_snapshots() else True
 
     def list_snapshots(self):
         '''
