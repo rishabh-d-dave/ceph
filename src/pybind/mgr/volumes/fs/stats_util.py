@@ -26,6 +26,7 @@ from .operations.subvolume import open_clone_subvol_pair_in_vol, open_subvol_in_
 from .operations.template import SubvolumeOpType
 from .operations.clone_index import open_clone_index, PATH_MAX
 from .operations.trash import Trash
+from .operations.trash_meta import get_trashcan_stats
 from .operations.resolver import resolve_group_and_subvolume_name
 from .exception import VolumeException
 from .async_cloner import get_clone_state
@@ -438,21 +439,21 @@ class PurgeProgressBar(VolumesProgressBar):
         if self.volclient.purge_queue.disable_purge_progress_bars:
             return
 
-        subvol_count, file_count = self._get_trash_stats()
-        log.debug('collected stats of purge first time')
+    def _get_trashcan_stats_for_all_vols(self):
+        init_subvol_count = 0
+        init_file_count = 0
 
-        # following 2 variables will be our reference to how many files/trash
-        # entries have been deleted by purge threads, indicating progress
-        # they've made.
+        for volname in list_volumes(self.volclient.mgr):
+            with open_volume_lockless(self.volclient, volname) as fs:
+                init_subvol_count2, init_file_count2, _ = \
+                    get_trashcan_stats(fs, self.volspec)
 
-        # init_subvol_count = initial num of trash entries
-        self.init_subvol_count = subvol_count
-        # init_file_count = initial num of files
-        self.init_file_count = file_count
-        log.debug(f'init: {self.init_file_count} files found in '
-                   '{self.init_subvol_count} subvolumes')
+                init_subvol_count += init_subvol_count2
+                init_file_count += init_file_count2
 
-    def _get_trash_stats(self):
+        return init_subvol_count, init_file_count
+
+    def _get_latest_trash_stats(self):
         file_count = 0
         subvol_count = 0
         TRASH_PATH = os_path_join(self.volspec.DEFAULT_SUBVOL_PREFIX,
@@ -472,25 +473,20 @@ class PurgeProgressBar(VolumesProgressBar):
         if self.volclient.purge_queue.disable_purge_progress_bars:
             return
 
-        subvol_count, file_count = self._get_trash_stats()
-        log.debug('collected stats of purge second time')
-        if self.init_file_count == 0 and file_count != 0:
-            # since initial count is zero but latest count is not zero,
-            # let's check trash dir once more.
-            self.subvol_count, self.init_file_count = subvol_count, file_count
-            subvol_count, file_count = self._get_trash_stats()
-            log.debug('collected stats of purge one more additional time')
+        init_subvol_count, init_file_count = \
+            self._get_trashcan_stats_for_all_vols()
 
+        subvol_count, file_count = self._get_latest_trash_stats()
         if file_count == 0:
             self.finish()
             return
 
-        diff = self.init_file_count - file_count
-        # progress fraction that progress module accepts to print the progress bar.
-        fraction = round(diff / self.init_file_count, 3)
+        diff = init_file_count - file_count
+        # progress module accepts progress as a fraction between 0.0 and 1.1.
+        fraction = round(diff / init_file_count, 3)
         percent = round(fraction * 100, 3)
-        msg = (f'Purging {self.init_subvol_count} '
-               f'subvolumes/{self.init_file_count} files, average progress = '
+        msg = (f'Purging {init_subvol_count} '
+               f'subvolumes/{init_file_count} files, average progress = '
                f'{percent}%')
         self._update_progress_bar_event(self.onpen_pev_id, msg, fraction)
         log.debug(f'finished updating purge progress bar with message: {msg}')
