@@ -4,7 +4,7 @@ import errno
 from logging import getLogger
 from io import StringIO
 
-from tasks.cephfs.test_volumes import TestVolumesHelper
+from tasks.cephfs.volumes.progress_bar import ProgressBarHelper
 
 from teuthology.contextutil import safe_while
 from teuthology.exceptions import CommandFailedError
@@ -12,13 +12,7 @@ from teuthology.exceptions import CommandFailedError
 log = getLogger(__name__)
 
 
-class RsizeDoesntMatch(Exception):
-
-    def __init__(self, msg):
-        self.msg = msg
-
-
-class CloneProgressReporterHelper(TestVolumesHelper):
+class CloneProgressReporterHelper(ProgressBarHelper):
     CLIENTS_REQUIRED = 1
 
     def setUp(self):
@@ -91,96 +85,26 @@ class CloneProgressReporterHelper(TestVolumesHelper):
 
         super(CloneProgressReporterHelper, self).tearDown()
 
-    # XXX: it is important to wait for rbytes value to catch up to actual size of
-    # subvolume so that progress bar shows sensible amount of progress
-    def wait_till_rbytes_is_right(self, v_name, sv_name, exp_size,
-                                  grp_name=None, sleep=2, max_count=60):
-        getpath_cmd = f'fs subvolume getpath {v_name} {sv_name}'
-        if grp_name:
-            getpath_cmd += f' {grp_name}'
-        sv_path = self.get_ceph_cmd_stdout(getpath_cmd)
-        sv_path = sv_path[1:]
-
-        for i in range(max_count):
-            r_size = self.mount_a.get_shell_stdout(
-                f'getfattr -n ceph.dir.rbytes {sv_path}').split('rbytes=')[1]
-            r_size = int(r_size.replace('"', '').replace('"', ''))
-            log.info(f'r_size = {r_size} exp_size = {exp_size}')
-            if exp_size == r_size:
-                break
-
-            time.sleep(sleep)
+    def get_clone_pevs_from_ceph_status(self, clones=None, check=True):
+        pevs = self.get_certain_pevs_from_ceph_status('clone')
+        if pevs:
+            return pevs
         else:
-            msg = ('size reported by rstat is not the expected size.\n'
-                   f'expected size = {exp_size}\n'
-                   f'size reported by rstat = {r_size}')
-            raise RsizeDoesntMatch(msg)
-
-    def filter_in_only_clone_pevs(self, progress_events):
-        '''
-        Progress events dictionary in output of "ceph status --format json"
-        has the progress bars and message associated with each progress bar.
-        Sometimes during testing of clone progress bars, and sometimes
-        otherwise too, an extra progress bar is seen with message "Global
-        Recovery Event". This extra progress bar interferes with testing of
-        progress bars for cloning.
-
-        This helper methods goes through this dictionary and picks only
-        (filters in) clone events.
-        '''
-        if progress_events == {}:
-            return {}
-
-        if not isinstance(progress_events, dict):
-            raise RuntimeError('variable "progress_events" should be '
-                               'dictionary, regardless of whether with or '
-                               'without any members')
-
-        clone_pevs = {}
-        for k, v in progress_events.items():
-            if 'mgr-vol-ongoing-clone' in k or 'mgr-vol-total-clone' in k:
-                clone_pevs[k] = v
-
-        return clone_pevs
-
-    def get_pevs_from_ceph_status(self, clones=None, check=True):
-        o = self.get_ceph_cmd_stdout('status --format json-pretty')
-        o = json.loads(o)
-
-        try:
-            pevs = o['progress_events'] # pevs = progress events
-        except KeyError as e:
             try:
                 if check and clones:
                     self.__check_clone_state('completed', clone=clones, timo=1)
-            except:
+            except Exception as e:
                 msg = ('Didn\'t find expected entries in dictionary '
                        '"progress_events" which is obtained from the '
                        'output of command "ceph status".\n'
                        f'Exception - {e}\npev -\n{pevs}')
                 raise Exception(msg)
 
-        pevs = self.filter_in_only_clone_pevs(pevs)
-
-        return pevs
-
-    def wait_for_both_progress_bars_to_appear(self, sleep=1, iters=20):
-        pevs = []
-        msg = (f'Waited for {iters*sleep} seconds but couldn\'t 2 progress '
-                'bars in output of "ceph status" command.')
-        with safe_while(tries=iters, sleep=sleep, action=msg) as proceed:
+    def _wait_for_clone_progress_bars_to_be_removed(self):
+        with safe_while(tries=10, sleep=0.5) as proceed:
             while proceed():
-                o = self.get_ceph_cmd_stdout('status --format json-pretty')
-                o = json.loads(o)
-                pevs = o['progress_events']
-                pevs = self.filter_in_only_clone_pevs(pevs)
-                if len(pevs) == 2:
-                    v = tuple(pevs.values())
-                    if 'ongoing+pending' in v[1]['message']:
-                        self.assertIn('ongoing', v[0]['message'])
-                    else:
-                        self.assertIn('ongoing', v[1]['message'])
-                        self.assertIn('ongoing+pending', v[0]['message'])
+                pevs = self.get_clone_pevs_from_ceph_status(check=False)
+                if not pevs:
                     break
 
     def get_onpen_count(self, pev):
@@ -290,17 +214,6 @@ class CloneProgressReporterHelper(TestVolumesHelper):
             except AssertionError:
                 self.assertIn('complete', o)
 
-    def _wait_for_clone_progress_bars_to_be_removed(self):
-        with safe_while(tries=10, sleep=0.5) as proceed:
-            while proceed():
-                o = self.get_ceph_cmd_stdout('status --format json-pretty')
-                o = json.loads(o)
-
-                pevs = o['progress_events'] # pevs = progress events
-                pevs = self.filter_in_only_clone_pevs(pevs)
-                if not pevs:
-                    break
-
 
 # NOTE: these tests consumes considerable amount of CPU and RAM due generation
 # random of files and due to multiple cloning jobs that are run simultaneously.
@@ -385,7 +298,7 @@ class TestCloneProgressReporter(CloneProgressReporterHelper):
 
         with safe_while(tries=10, sleep=1) as proceed:
             while proceed():
-                pev = self.get_pevs_from_ceph_status(c)
+                pev = self.get_clone_pevs_from_ceph_status(c)
 
                 if len(pev) < 1:
                    continue
@@ -434,7 +347,7 @@ class TestCloneProgressReporter(CloneProgressReporterHelper):
 
         with safe_while(tries=10, sleep=1) as proceed:
             while proceed():
-                pev = self.get_pevs_from_ceph_status(c)
+                pev = self.get_clone_pevs_from_ceph_status(c)
 
                 if len(pev) < 1:
                    continue
@@ -486,7 +399,7 @@ class TestCloneProgressReporter(CloneProgressReporterHelper):
 
         with safe_while(tries=15, sleep=10) as proceed:
             while proceed():
-                pev = self.get_pevs_from_ceph_status(c)
+                pev = self.get_clone_pevs_from_ceph_status(c)
 
                 if len(pev) < 1:
                    continue
@@ -530,7 +443,7 @@ class TestCloneProgressReporter(CloneProgressReporterHelper):
 
         with safe_while(tries=10, sleep=1) as proceed:
             while proceed():
-                pev = self.get_pevs_from_ceph_status(c)
+                pev = self.get_clone_pevs_from_ceph_status(c)
 
                 if len(pev) < 1:
                     time.sleep(1)
@@ -582,7 +495,7 @@ class TestCloneProgressReporter(CloneProgressReporterHelper):
                'they were expected')
         with safe_while(tries=20, sleep=1, action=msg) as proceed:
             while proceed():
-                pevs = self.get_pevs_from_ceph_status(c)
+                pevs = self.get_clone_pevs_from_ceph_status(c)
 
                 if len(pevs) <= 1:
                     continue # let's wait for second progress bar to appear
@@ -832,7 +745,7 @@ class TestOngoingClonesCounter(CloneProgressReporterHelper):
                'they were expected')
         with safe_while(tries=20, sleep=1, action=msg) as proceed:
             while proceed():
-                pevs = self.get_pevs_from_ceph_status(c)
+                pevs = self.get_clone_pevs_from_ceph_status(c)
 
                 if len(pevs) <= 1:
                     continue # let's wait for second progress bar to appear
