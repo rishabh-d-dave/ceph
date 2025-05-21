@@ -335,14 +335,14 @@ class VolumeClient(CephfsClient["Module"]):
             raise
 
         if self.subvol_stats_before_purge.get(volname, None):
+            self.subvol_stats_before_purge[volname]['total_subvols'] += 1
             self.subvol_stats_before_purge[volname]['total_files'] += num_of_subvol_files
             self.subvol_stats_before_purge[volname]['total_size'] += subvol_size
-            self.subvol_stats_before_purge[volname]['total_subvols'] += 1
         else:
             self.subvol_stats_before_purge[volname] = {
+                'total_subvols': 1,
                 'total_files': num_of_subvol_files,
-                'total_size': subvol_size,
-                'total_subvols': 1}
+                'total_size': subvol_size}
 
         log.debug('total files in trash dir = '
                   f'{self.subvol_stats_before_purge[volname]["total_files"]}')
@@ -1143,12 +1143,28 @@ class VolumeClient(CephfsClient["Module"]):
 
     def _create_purge_status_report(self, volname, stats):
         '''
-        Calculate amount and percentage of subvolumes, files and size of data
-        purged, save it in dictonary and return the dictionary.
+        Create a report on the progress made in purging of subvolumes by
+        calculating the amount and the percentage of subvolumes, files and size
+        of data purged.
         '''
-        total_subvols = self.subvol_stats_before_purge[volname]['total_subvols']
-        total_files = self.subvol_stats_before_purge[volname]['total_files']
-        total_size = self.subvol_stats_before_purge[volname]['total_size']
+        try:
+            total_subvols = self.subvol_stats_before_purge[volname]['total_subvols']
+            total_files = self.subvol_stats_before_purge[volname]['total_files']
+            total_size = self.subvol_stats_before_purge[volname]['total_size']
+        # If volumes plugin or MGR is restarted, all stats stored in
+        # self.subvol_stats_before_purge will be lost leading to KeyError.
+        # In such a case save currently obtained stats in it and re-fetch latest
+        # stats after a second. Now, proceed as usual.
+        except KeyError:
+            self.subvol_stats_before_purge[volname] = {
+                'total_subvols': stats['subvol_left'],
+                'total_files': stats['files_left'],
+                'total_size': stats['size_left']}
+            sleep(1)
+            stats = trashcan.get_stats()
+            total_subvols = self.subvol_stats_before_purge[volname]['total_subvols']
+            total_files = self.subvol_stats_before_purge[volname]['total_files']
+            total_size = self.subvol_stats_before_purge[volname]['total_size']
 
         subvols_purged = total_subvols - stats['subvols_left']
         subvols_purged_percent = round(subvols_purged/total_subvols * 100)
