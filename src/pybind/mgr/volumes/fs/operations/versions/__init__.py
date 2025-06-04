@@ -110,24 +110,34 @@ class SubvolumeLoader(object):
         subvolume = SubvolumeBase(mgr, fs, vol_spec, group, subvolname)
         try:
             subvolume.discover()
-            self.upgrade_to_v2_subvolume(subvolume)
+            if subvolume.is_it_v3_meta() and subvolume.is_v3_meta_broken_symlink():
+                version = 3
+            else:
+                self.upgrade_to_v2_subvolume(subvolume)
+                version = int(subvolume.metadata_mgr.get_global_option('version'))
 
-            version = int(subvolume.metadata_mgr.get_global_option('version'))
             subvol_class = self._get_subvolume_version(version)
             if version <= 2:
                 subvol_obj = subvol_class(mgr, fs, vol_spec, group, subvolname,
                                           legacy=subvolume.legacy_mode)
+                subvol_obj.metadata_mgr.refresh()
+                subvol_obj.clean_stale_snapshot_metadata()
             elif version == 3:
-                subvol_data_path = subvolume.metadata_mgr.get_global_option('path')
-                uuid = basename(dirname(subvol_data_path))
-                subvol_obj = subvol_class(mgr, fs, vol_spec, group, subvolname,
-                                          legacy=subvolume.legacy_mode,
-                                          uuid=uuid)
+                if subvolume.is_v3_meta_broken_symlink():
+                    subvol_obj = subvol_class(mgr, fs, vol_spec, group, subvolname,
+                                              legacy=subvolume.legacy_mode,
+                                              uuid=None)
+                else:
+                    subvol_data_path = subvolume.metadata_mgr.get_global_option('path')
+                    uuid = basename(dirname(subvol_data_path))
+                    subvol_obj = subvol_class(mgr, fs, vol_spec, group, subvolname,
+                                              legacy=subvolume.legacy_mode,
+                                              uuid=uuid)
+                    subvol_obj.metadata_mgr.refresh()
+                    subvol_obj.clean_stale_snapshot_metadata()
             else:
                 raise RuntimeError('recevied unexpected subvol version')
 
-            subvol_obj.metadata_mgr.refresh()
-            subvol_obj.clean_stale_snapshot_metadata()
             return subvol_obj
         except MetadataMgrException as me:
             if me.errno == -errno.ENOENT and upgrade:

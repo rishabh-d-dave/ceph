@@ -59,11 +59,15 @@ class SubvolumeV3(SubvolumeV2):
 
     def __init__(self, mgr, fs, vol_spec, group, subvolname, legacy=False,
                  uuid=None):
+        self.fs = fs
+
         # XXX: this needs to be defined beforehand since __init__() below calls
         # __init__() from previous versions and previous versions needs
         # self.base_path to be defined. self.subvol_dir in v3 is same
         # self.base_path in older versions.
         self.subvol_dir = f'/volumes/{group.groupname}/{subvolname}'
+        self.current_meta = f'{self.subvol_dir}/.meta'
+        self.current_meta = self.current_meta.encode('utf-8')
 
         # XXX: both of these needs to be defined beforehand because __init__()
         # below will initialize metadata manager too which results in
@@ -72,13 +76,16 @@ class SubvolumeV3(SubvolumeV2):
         if uuid:
             self.uuid = uuid
         else:
-            self.uuid = uuid4()
+            self.uuid = self.get_current_incar_uuid()
+            if not uuid:
+                self.uuid = uuid4()
+
         self.meta = f'{self.subvol_dir}/.meta.{self.uuid}'
 
         # encode these variables since they'll be used in __init__() below and
         # all its underlying calls.
-        self.meta = self.meta.encode('utf-8')
         self.subvol_dir = self.subvol_dir.encode('utf-8')
+        self.meta = self.meta.encode('utf-8')
 
         super(SubvolumeV3, self).__init__(mgr, fs, vol_spec, group, subvolname)
 
@@ -90,7 +97,6 @@ class SubvolumeV3(SubvolumeV2):
         # contains data dir for all incarnations
         self.roots_dir = f'{self.subvol_dir}/roots'
         # meta file for the current subvolume's incarnation
-        self.current_meta = f'{self.subvol_dir}/.meta'
 
         self.uuid_dir = f'{self.roots_dir}/{self.uuid}'
         self.mnt_dir = f'{self.uuid_dir}/mnt'
@@ -101,7 +107,6 @@ class SubvolumeV3(SubvolumeV2):
 
         self.subvol_dir = self.subvol_dir.encode('utf-8')
         self.roots_dir = self.roots_dir.encode('utf-8')
-        self.current_meta = self.current_meta.encode('utf-8')
         # encoded already before calling __init__(), keeping this comment to
         # prevent accidental re-encoding in future.
         #self.meta = self.meta.encode('utf-8')
@@ -112,6 +117,22 @@ class SubvolumeV3(SubvolumeV2):
 
         self.snap_dir = self.snap_dir.encode('utf-8')
         self.fscrypt_dir = self.fscrypt_dir.encode('utf-8')
+
+    def get_current_incar_uuid(self):
+        try:
+            meta_file = self.fs.readlink(self.current_meta, PATH_MAX)
+
+            base_path = self.base_path
+            if isinstance(base_path, str):
+                base_path = base_path.encode('utf-8')
+            meta_file_path = join(base_path, meta_file)
+
+            self.fs.stat(meta_file_path)
+            meta_file_name = basename(meta_file_path)
+            uuid = meta_file_name.replace('.meta.', '')
+            return uuid
+        except cephfs.ObjectNotFound:
+            return None
 
     @staticmethod
     def version():
@@ -157,6 +178,7 @@ class SubvolumeV3(SubvolumeV2):
         self.fs.symlink(basename(self.meta), self.current_meta)
 
     def _create(self, mode, attrs, subvol_type, auth=True):
+
         self._create_v3_layout(mode)
 
         self.set_subvol_xattr()
@@ -216,7 +238,7 @@ class SubvolumeV3(SubvolumeV2):
         super(SubvolumeV3, self).remove(retainsnaps, internal_cleanup)
 
         # if entire subvol dir was deleted, and not just incarnation dir, then
-        # .meta file was also deleted along and therefore skipping unlinking/
+        # .meta file was also deleted along and therefore skip unlinking/
         # re-linking it and return.
         try:
             self.fs.stat(self.subvol_dir)
@@ -225,6 +247,8 @@ class SubvolumeV3(SubvolumeV2):
 
         self.fs.unlink(self.current_meta)
         self.fs.symlink('dummy', self.current_meta)
+        self.uuid = None
+        self.meta = self.current_meta
 
     # TODO: base dir should be deleted in subvol v3 too when no snaps are
     # retained on any incarnation, right?
@@ -337,7 +361,7 @@ class SubvolumeV3(SubvolumeV2):
         # adding a delay using mgr/volumes/snapshot_clone_delay config option.
         try:
             self.fs.stat(snap_path)
-        except cephfs.Error as e:
+        except cephfs.ObjectNotFound as e:
             if e.errno == errno.ENOENT:
                 raise VolumeException(-errno.ENOENT,
                                       f'snapshot \'{snap_name}\' does not exist')

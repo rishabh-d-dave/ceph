@@ -23,6 +23,8 @@ from ceph.fs.earmarking import CephFSVolumeEarmarking, EarmarkException
 log = logging.getLogger(__name__)
 
 
+PATH_MAX = 4096
+
 class SubvolumeBase(object):
     LEGACY_CONF_DIR = "_legacy"
 
@@ -157,6 +159,9 @@ class SubvolumeBase(object):
                                                 self.legacy_config_path,
                                                 0o640)
         else:
+            if self.is_it_v3_meta() and self.is_v3_meta_broken_symlink():
+                self.metadata_mgr = None
+                return
             self.metadata_mgr = MetadataManager(self.fs,
                                                 self.config_path, 0o640)
 
@@ -384,11 +389,45 @@ class SubvolumeBase(object):
                                subvolume_path, subvolume_state.value)
         self.metadata_mgr.flush()
 
+    def is_it_v3_meta(self):
+        try:
+            stxb = self.fs.statx(self.config_path, cephfs.CEPH_STATX_BTIME
+                               | cephfs.CEPH_STATX_SIZE
+                               | cephfs.CEPH_STATX_UID | cephfs.CEPH_STATX_GID
+                               | cephfs.CEPH_STATX_MODE | cephfs.CEPH_STATX_ATIME
+                               | cephfs.CEPH_STATX_MTIME
+                               | cephfs.CEPH_STATX_CTIME,
+                               cephfs.AT_SYMLINK_NOFOLLOW)
+            if stat.S_ISLNK(stxb['mode']):
+                return True
+            else:
+                return False
+        except cephfs.ObjectNotFound as e:
+            if e.errno == errno.ENOENT:
+                return False
+            else:
+                raise
+
+    def is_v3_meta_broken_symlink(self):
+        try:
+            meta_file = self.fs.readlink(self.config_path, PATH_MAX)
+            meta_file_path = os.path.join(self.base_path, meta_file)
+            self.fs.stat(meta_file_path)
+        except cephfs.ObjectNotFound as e:
+            if e.errno == errno.ENOENT:
+                return True
+            else:
+                raise
+        return False
+
     def discover(self):
         log.debug("discovering subvolume "
                   "'{0}' [mode: {1}]".format(self.subvolname, "legacy"
                                              if self.legacy_mode else "new"))
         try:
+            if self.is_it_v3_meta() and self.is_v3_meta_broken_symlink():
+                return
+
             self.fs.stat(self.base_path)
             self.metadata_mgr.refresh()
             log.debug("loaded subvolume '{0}'".format(self.subvolname))

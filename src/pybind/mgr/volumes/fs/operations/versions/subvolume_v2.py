@@ -300,7 +300,11 @@ class SubvolumeV2(SubvolumeV1):
             raise VolumeException(-errno.ENOTSUP, "operation {0} not supported on subvolume '{1}'".format(
                                   op_type.value, self.subvolname))
         try:
-            self.metadata_mgr.refresh()
+            if self.is_it_v3_meta() and self.is_v3_meta_broken_symlink():
+                pass
+            else:
+                self.metadata_mgr.refresh()
+
             # unconditionally mark as subvolume, to handle pre-existing subvolumes without the mark
             self.set_subvol_xattr()
 
