@@ -2,10 +2,12 @@ import os
 import uuid
 import logging
 from contextlib import contextmanager
+from collections import deque
 
 import cephfs
 
 from .template import GroupTemplate
+from ..fs_util import is_dir_empty
 from ..exception import VolumeException
 
 log = logging.getLogger(__name__)
@@ -59,31 +61,36 @@ class Trash(GroupTemplate):
         :praram should_cancel: callback to check if the purge should be aborted
         :return: None
         """
-        def rmtree(root_path):
-            log.debug("rmtree {0}".format(root_path))
-            try:
-                with self.fs.opendir(root_path) as dir_handle:
-                    d = self.fs.readdir(dir_handle)
-                    while d and not should_cancel():
-                        if d.d_name not in (b".", b".."):
-                            d_full = os.path.join(root_path, d.d_name)
-                            if d.is_dir():
-                                rmtree(d_full)
-                            else:
-                                self.fs.unlink(d_full)
-                        d = self.fs.readdir(dir_handle)
-            except cephfs.ObjectNotFound:
-                return
-            except cephfs.Error as e:
-                raise VolumeException(-e.args[0], e.args[1])
-            # remove the directory only if we were not asked to cancel
-            # (else we would fail to remove this anyway)
-            if not should_cancel():
-                self.fs.rmdir(root_path)
-
-        # catch any unlink errors
+        log.debug(f'rmtree trashpath = {trashpath}')
         try:
-            rmtree(trashpath)
+            stack = deque([trashpath, ])
+            while stack and not should_cancel():
+                x = stack[len(stack) - 1]
+
+                with self.fs.opendir(x) as dir_handle:
+                    de = self.fs.readdir(dir_handle)
+                    while de and not should_cancel():
+                        if de.d_name in (b'.', b'..'):
+                            de = self.fs.readdir(dir_handle)
+                            continue
+
+                        de_path = os.path.join(x, de.d_name)
+                        if de.is_dir():
+                            if is_dir_empty(self.fs, de_path):
+                                self.fs.rmdir(de_path)
+                            else:
+                                stack.append(de_path)
+                                break
+                        elif de.is_file():
+                            self.fs.unlink(de_path)
+
+                        de = self.fs.readdir(dir_handle)
+
+                if is_dir_empty(self.fs, x):
+                    self.fs.rmdir(x)
+                    stack.pop()
+        except cephfs.ObjectNotFound:
+            return
         except cephfs.Error as e:
             raise VolumeException(-e.args[0], e.args[1])
 

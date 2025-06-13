@@ -93,6 +93,8 @@ def listdir(fs, dirpath, filter_entries=None, filter_files=True):
         raise VolumeException(-e.args[0], e.args[1])
     return entries
 
+def is_dir_empty(fs, dirpath):
+    return False if listdir(fs, dirpath, filter_files=False) else True
 
 def has_subdir(fs, dirpath, filter_entries=None):
     """
