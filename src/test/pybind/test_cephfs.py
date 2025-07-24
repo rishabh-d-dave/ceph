@@ -1134,6 +1134,8 @@ class TestRmtree:
         branch where permission for one of the (non-root) directories is not
         granted.
         '''
+        cephfs.chown('/', 1000, 1000)
+
         should_cancel = lambda: False
 
         cephfs.mkdir('dir1', 0o755)
