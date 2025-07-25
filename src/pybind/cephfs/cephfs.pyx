@@ -3008,7 +3008,7 @@ cdef class LibCephFS(object):
             self._rmtree(trash_path, should_cancel, suppress_errors)
 
 
-class RmtreeDir:
+class TraverseDir:
     '''
     Holds the path and handle for the directory being traversed.
 
@@ -3103,6 +3103,12 @@ class RmtreeDir:
             # directory, not on a entry in this directory
             log.error(f'Exception occured: "{e}"')
             self.set_readdir_error()
+
+
+class RmtreeDir(TraverseDir):
+
+    def __init__(self, path, fs, suppress_errors=False):
+        super().__init__(path, fs, suppress_errors)
 
     def try_rmdir(self, de_name):
         '''
