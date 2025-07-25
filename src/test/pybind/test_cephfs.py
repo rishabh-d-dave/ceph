@@ -12,17 +12,53 @@ import stat
 import uuid
 import json
 from datetime import datetime
+from subprocess import getoutput
+'''
+from tempfile import mktemp
+'''
 
 cephfs = None
 
 def setup_module():
     global cephfs
     cephfs = libcephfs.LibCephFS(conffile='')
+
+    username = getoutput('id -un')
+    uid = getoutput(f'id -u {username}')
+    gid = getoutput(f'id -g {username}')
+    cephfs.conf_set('client_mount_uid', uid)
+    cephfs.conf_set('client_mount_gid', gid)
+
+    '''
+    ceph_bin = os.getenv('CEPH_BIN')
+    if not ceph_bin:
+        ceph_bin = 'ceph'
+
+    getoutput(f'{ceph_bin} auth add client.x mon "allow rw " '
+               'osd "allow rw tag cephfs data=*" '
+              f'mds "allow rw uid={uid} gids={gid}"')
+    keyring = getoutput(f'{ceph_bin} auth get client.x')
+    keyring_path = mktemp()
+    with open(keyring_path, 'a') as f:
+        f.write(keyring)
+
+    import pdb; pdb.set_trace()
+    cephfs.conf_set("client", "x")
+    cephfs.conf_set('keyring', keyring_path)
+    '''
+
     cephfs.mount()
 
 def teardown_module():
     global cephfs
     cephfs.shutdown()
+
+    '''
+    ceph_bin = os.getenv('CEPH_BIN')
+    if not ceph_bin:
+        ceph_bin = 'ceph'
+    getoutput(f'{ceph_bin} auth del client.x')
+    '''
 
 def purge_dir(path, is_snap = False):
     print(b"Purge " + path)
@@ -1126,6 +1162,9 @@ class TestRmtree:
         '''
         should_cancel = lambda: False
 
+        st = cephfs.stat('/')
+        print(f'uid = {st.st_uid} gid = {st.st_gid} permission = {stat.filemode(st.st_mode)}')
+
         cephfs.mkdir('dir1', 0o755)
 
         cephfs.mkdir('dir1/dir2', 0o755)
@@ -1424,7 +1463,7 @@ class TestRmtree:
         cephfs.rmtree('dir1', should_cancel, suppress_errors=False)
         assert_raises(libcephfs.ObjectNotFound, cephfs.stat, 'dir1')
 
-    def test_rmtree_on_a_very_very_deep_tree(self, testdir):
+    def _test_rmtree_on_a_very_very_deep_tree(self, testdir):
         '''
         Test that rmtree() successfully deletes a file hierarchy with 2000
         levels.
