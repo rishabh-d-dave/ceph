@@ -1333,6 +1333,12 @@ class TestRmtree:
             time.sleep(0.1)
             return cancel_flag.is_set()
 
+        # NOTE: this method is just a wrapper to provide an appropriate location
+        # to catch the exception OpCancelled.
+        def rmtree(path, should_cancel, suppress_error=False):
+            assert_raises(libcephfs.OpCancelled, cephfs.rmtree, path,
+                          should_cancel, suppress_error)
+
         cephfs.mkdir('dir6', 0o755)
         for i in range(1, 101):
             fd = cephfs.open(f'/dir6/file{i}', 'w', 0o755)
@@ -1342,9 +1348,8 @@ class TestRmtree:
         # Errors are not expected from the call to this method. Therefore, set
         # suppress_errors to False so that tests abort as soon as any errors
         # occur.
-        Thread(target=cephfs.rmtree, args=('dir6', should_cancel,
-                                           False)).start()
-        time.sleep(0.5)
+        Thread(target=rmtree, args=('dir6', should_cancel, False)).start()
+        time.sleep(1)
 
         # this will change return value of should_cancel and therefore halt
         # execution of rmtree()
