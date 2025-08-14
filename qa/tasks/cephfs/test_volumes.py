@@ -9631,3 +9631,10 @@ class TestPerModuleFinsherThread(TestVolumesHelper):
 
         # verify trash dir is clean
         self._wait_for_trash_empty()
+
+class TestPurge(TestVolumesHelper):
+
+    def test_purging_subvol_2000_level_of_dirs(self):
+        cmd = 'set -x; for i in {1..2000}; do mkdir dir$i; cd dir$i; done; set +x'
+        self.mount_a.run_shell_payload(cmd, timeout=(3*60*60))
+        self.mount_a.run_shell('rm -rf dir1', timeout=(3*60*60))
