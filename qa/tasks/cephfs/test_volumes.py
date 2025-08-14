@@ -9260,3 +9260,25 @@ class TestPerModuleFinsherThread(TestVolumesHelper):
 
         # verify trash dir is clean
         self._wait_for_trash_empty()
+
+class TestPurge(TestVolumesHelper):
+
+    def test_purging_subvol_2000_level_of_dirs(self):
+        v = self.volname
+        sv = 'sv1234'
+
+        self.run_ceph_cmd(f'fs subvolume create {v} {sv} --mode=777')
+        sv_path = self.get_ceph_cmd_stdout(f'fs subvolume getpath {v} {sv}').strip()
+        # remove '/' from at beginning of the path
+        sv_path = sv_path[1:]
+        sv_path = os.path.join(self.mount_a.hostfs_mntpt, sv_path)
+
+        cmd = 'set -x; for i in {1..2000}; do mkdir dir$i; cd dir$i; done; set +x'
+        self.mount_a.run_shell_payload(cmd, cwd=sv_path, timeout=(3*60*60))
+        self.run_ceph_cmd(f'fs subvolume rm {v} {sv}')
+
+        # dummy value to let the loop begin running
+        output = 1
+        while not output:
+            output = self.mount_a.get_shell_stdout('ls volumes/_deleting').strip()
+            time.sleep(2)
