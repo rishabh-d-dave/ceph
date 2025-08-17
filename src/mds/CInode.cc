@@ -174,10 +174,34 @@ struct cinode_lock_info_t cinode_lock_info[] = {
 };
 int num_cinode_locks = sizeof(cinode_lock_info) / sizeof(cinode_lock_info[0]);
 
+/* Printing more than 10 components of a path not only is not useful but it also
+ * makes reading logs harder (imagine path with 2000 components). Therefore,
+ * shorten path. */
+void shorten_path_string(string& path) {
+  if (std::count(path.begin(), path.end(), '/') <= 10) {
+    return;
+  }
+
+  // initialized to 0 instead of 1 to ignore '/' at the beginning of path.
+  int index1 = 1;
+  for (int i = 1; i <= 5; ++i) {
+    index1 = path.find('/', index1+1);
+  }
+  index1 += 1;
+
+  int index2 = 0;
+  for (int i = 1; i <= 5; ++i) {
+    index2 = path.rfind('/', index2 - 1);
+  }
+
+  path = path.substr(0, index1) + ".." + path.substr(index2, path.size());
+}
+
 ostream& operator<<(ostream& out, const CInode& in)
 {
   string path;
   in.make_path_string(path, true);
+  shorten_path_string(path);
 
   out << "[inode " << in.ino();
   out << " [" 
