@@ -5,6 +5,7 @@
 
 #include "db/blob/blob_file_meta.h"
 
+#include <cstdint>
 #include <ostream>
 #include <sstream>
 
