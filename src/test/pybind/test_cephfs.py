@@ -270,6 +270,18 @@ def test_create_and_rm_2000_subdir_levels_close_v4(testdir):
         dirpath = stack[-1]
         _rm_or_enstack_dir(dirpath, stack)
 
+def test_create_and_rm_2000_subdir_on_same_level_close(testdir):
+    LEVELS = 2000
+    cephfs.mkdir('dir1', 0o755)
+    cephfs.chdir('dir1')
+    for i in range(1, LEVELS + 1):
+        cephfs.mkdir(f'dir{i}'.encode('utf-8'), 0o755)
+
+    for i in range(1, LEVELS + 1):
+        cephfs.rmdir(f'dir{i}'.encode('utf-8'))
+    cephfs.chdir(b'..')
+    cephfs.rmdir(b'dir1')
+
 def test_ceph_mirror_xattr(testdir):
     def gen_mirror_xattr():
         cluster_id = str(uuid.uuid4())
