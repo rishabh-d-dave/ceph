@@ -568,6 +568,20 @@ struct optmetadata_singleton {
     return u64kind < other.u64kind;
   }
 
+  bool operator == (const optmetadata_singleton& other) {
+    if (u64kind != other.u64kind) {
+      return false;
+    }
+
+    // odm = optmetadata
+    return std::visit([](auto& this_odm, auto& other_odm)
+			 { this_odm == other_odm; }, optmetadata, other.optmetadata);
+  }
+
+  bool operator != (const optmetadata_singleton& other) {
+    return !(*this == other);
+  }
+
 private:
   uint64_t u64kind = 0;
   optmetadata_t optmetadata;
@@ -642,6 +656,30 @@ struct optmetadata_multiton {
     return opts.size();
   }
 
+  bool operator == (const optmetadata_multiton<Singleton, Allocator>& other)
+  {
+      if (size() != other.size())
+	return false;
+
+      auto it_this = opts.begin();
+      auto it_other = other.opts.begin();
+      while (it_this != opts.end() and it_other != opts.end()) {
+	if (*it_this != *it_other) {
+	  return false;
+	}
+
+	++it_this;
+	++it_other;
+      }
+
+      return true;
+  }
+
+  bool operator != (const optmetadata_multiton<Singleton, Allocator>& other)
+  {
+    return !(*this == other);
+  }
+
 private:
   optvec_t opts;
 };
@@ -673,17 +711,17 @@ static inline void decode(optmetadata_multiton<Singleton,Allocator>& o, ::ceph::
 }
 
 template<template<typename> class Allocator = std::allocator>
-static inline bool operator==(
+static inline bool operator == (
     const optmetadata_multiton<optmetadata_singleton<optmetadata_server_t<Allocator>,Allocator>,Allocator>& l,
     const optmetadata_multiton<optmetadata_singleton<optmetadata_server_t<Allocator>,Allocator>,Allocator>& r) {
-  return memcmp(&l, &r, sizeof(l)) == 0;
+  return l == r;
 }
 
 template<template<typename> class Allocator = std::allocator>
-static inline bool operator!=(
+static inline bool operator != (
     const optmetadata_multiton<optmetadata_singleton<optmetadata_server_t<Allocator>,Allocator>,Allocator>& l,
     const optmetadata_multiton<optmetadata_singleton<optmetadata_server_t<Allocator>,Allocator>,Allocator>& r) {
-  return memcmp(&l, &r, sizeof(l)) != 0;
+  return !(l == r);
 }
 
 template<template<typename> class Allocator = std::allocator>
