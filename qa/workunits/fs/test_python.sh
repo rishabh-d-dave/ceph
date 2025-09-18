@@ -1,5 +1,7 @@
 #!/bin/sh -ex
 
+ceph config get mds mds_tick_interval
+ceph config set mds mds_tick_interval 1
 # Running as root because the filesystem root directory will be
 # owned by uid 0, and that's where we're writing.
 sudo python3 -m pytest -v $(dirname $0)/../../../src/test/pybind/test_cephfs.py -k test_create_and_rm_2000_subdir_levels_close_v4
