@@ -568,6 +568,23 @@ struct optmetadata_singleton {
     return u64kind < other.u64kind;
   }
 
+  bool operator == (const optmetadata_singleton& other) const {
+    if (u64kind != other.u64kind) {
+      return false;
+    }
+
+    return std::visit(
+      [](auto& this_optmetadata, auto& other_optmetadata)
+      {
+	return memcmp(&this_optmetadata, &other_optmetadata, sizeof(this_optmetadata)) == 0;
+      },
+      optmetadata, other.optmetadata);
+  }
+
+  bool operator != (const optmetadata_singleton& other) const {
+    return !(*this == other);
+  }
+
 private:
   uint64_t u64kind = 0;
   optmetadata_t optmetadata;
@@ -642,6 +659,30 @@ struct optmetadata_multiton {
     return opts.size();
   }
 
+  bool operator == (const optmetadata_multiton<optmetadata_singleton<optmetadata_server_t<Allocator>,Allocator>, Allocator>& other) const
+  {
+      if (size() != other.size())
+	return false;
+
+      auto it_this = opts.begin();
+      auto it_other = other.opts.begin();
+      while (it_this != opts.end() and it_other != opts.end()) {
+	if (*it_this != *it_other) {
+	  return false;
+	}
+
+	++it_this;
+	++it_other;
+      }
+
+      return true;
+  }
+
+  bool operator != (const optmetadata_multiton<optmetadata_singleton<optmetadata_server_t<Allocator>,Allocator>, Allocator>& other) const
+  {
+    return !(*this == other);
+  }
+
 private:
   optvec_t opts;
 };
@@ -670,20 +711,6 @@ template<typename Singleton, template<typename> class Allocator>
 static inline void decode(optmetadata_multiton<Singleton,Allocator>& o, ::ceph::buffer::list::const_iterator& p)
 {
   o.decode(p);
-}
-
-template<template<typename> class Allocator = std::allocator>
-static inline bool operator==(
-    const optmetadata_multiton<optmetadata_singleton<optmetadata_server_t<Allocator>,Allocator>,Allocator>& l,
-    const optmetadata_multiton<optmetadata_singleton<optmetadata_server_t<Allocator>,Allocator>,Allocator>& r) {
-  return memcmp(&l, &r, sizeof(l)) == 0;
-}
-
-template<template<typename> class Allocator = std::allocator>
-static inline bool operator!=(
-    const optmetadata_multiton<optmetadata_singleton<optmetadata_server_t<Allocator>,Allocator>,Allocator>& l,
-    const optmetadata_multiton<optmetadata_singleton<optmetadata_server_t<Allocator>,Allocator>,Allocator>& r) {
-  return memcmp(&l, &r, sizeof(l)) != 0;
 }
 
 template<template<typename> class Allocator = std::allocator>
