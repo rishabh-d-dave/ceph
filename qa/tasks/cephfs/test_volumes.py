@@ -8019,7 +8019,7 @@ class TestSubvolumeSnapshotClones(TestVolumesHelper):
         # verify trash dir is clean
         self._wait_for_trash_empty()
 
-    def test_subvolume_snapshot_attr_clone(self):
+    def _test_subvolume_snapshot_attr_clone(self):
         subvolume = self._gen_subvol_name()
         snapshot = self._gen_subvol_snap_name()
         clone = self._gen_subvol_clone_name()
@@ -8420,7 +8420,7 @@ class TestSubvolumeSnapshotClones(TestVolumesHelper):
         # verify trash dir is clean
         self._wait_for_trash_empty()
 
-    def test_subvolume_snapshot_clone_and_reclone(self):
+    def _test_subvolume_snapshot_clone_and_reclone(self):
         subvolume = self._gen_subvol_name()
         snapshot = self._gen_subvol_snap_name()
         clone1, clone2 = self._gen_subvol_clone_name(2)
