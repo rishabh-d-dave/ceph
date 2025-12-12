@@ -10270,6 +10270,62 @@ class TestMisc(TestVolumesHelper):
             self._fs_cmd('subvolume', 'create', volname, badname)
         self._fs_cmd('volume', 'rm', volname, '--yes-i-really-mean-it')
 
+    def test_names_cant_start_with_digit(self):
+        badname = '12abcd'
+        errmsg = 'name starting with a digit is not allowed'
+
+        self.negtest_ceph_cmd(f'fs volume create {badname}', errmsgs=errmsg)
+
+        volname = 'vol1'
+        self.run_ceph_cmd(f'fs volume create {volname}')
+
+        self.negtest_ceph_cmd(
+            args=f'fs subvolumegroup create {volname} {badname}',
+            errmsgs=errmsg)
+        self.negtest_ceph_cmd(
+            args=f'fs subvolume create {volname} {badname}',
+            errmsgs=errmsg)
+
+        self.run_ceph_cmd(f'fs volume rm {volname} --yes-i-really-mean-it')
+
+    def test_names_cant_start_with_dot(self):
+        badname = '.abcd'
+        errmsg = 'name starting with a dot is not allowed'
+
+        self.negtest_ceph_cmd(args=f'fs volume create {badname}',
+                              errmsgs=errmsg)
+
+        volname = 'vol1'
+        self.run_ceph_cmd(f'fs volume create {volname}')
+
+        self.negtest_ceph_cmd(
+            args=f'fs subvolumegroup create {volname} {badname}',
+            errmsgs=errmsg)
+        self.negtest_ceph_cmd(
+            args=f'fs subvolume create {volname} {badname}',
+            errmsgs=errmsg)
+
+        self.run_ceph_cmd(f'fs volume rm {volname} --yes-i-really-mean-it')
+
+    def test_names_cant_be_blank(self):
+        badname = ''
+        errmsg = 'name is blank which is not allowed'
+
+        self.negtest_ceph_cmd(args=['fs', 'volume', 'create', badname],
+                              errmsgs=errmsg)
+
+        volname = 'vol1'
+        self.run_ceph_cmd(f'fs volume create {volname}')
+
+        self.negtest_ceph_cmd(args=['fs', 'subvolumegroup', 'create', volname,
+                                    badname],
+                              errmsgs=errmsg)
+        self.negtest_ceph_cmd(args=['fs', 'subvolume', 'create', volname,
+                                    badname],
+                              errmsgs=errmsg)
+
+        self.run_ceph_cmd(f'fs volume rm {volname} --yes-i-really-mean-it')
+
     def test_subvolume_ops_on_nonexistent_vol(self):
         # tests the fs subvolume operations on non existing volume
 
