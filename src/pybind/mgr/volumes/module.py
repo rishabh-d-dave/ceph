@@ -732,8 +732,15 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
     # those places.
     # See: https://github.com/ceph/ceph/pull/60534#discussion_r2228436110
     def _is_name_valid(self, name, nameof):
-        if not name:
+        errmsg = None
+
+        if not name and nameof != 'subvolume group':
             errmsg = (f"{nameof} name is blank which is not allowed")
+        elif not name and nameof == 'subvolume group':
+            # XXX: None is allowed as subvolume group name as it implies the
+            # default group.
+            if name is not None:
+                errmsg = (f"{nameof} name is blank which is not allowed")
         # leading dot in name of subvolume groups and subvolumes
         # will make them hidden dirs, which doesn't seem like a
         # sensible thing to have
@@ -748,8 +755,6 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
         # "3cephfs", "7subvol".
         elif name[0].isdigit():
             errmsg = f"{nameof} name starting with a digit is not allowed"
-        else:
-            errmsg = None
 
         if errmsg:
             return (-errno.EINVAL, "", errmsg)
