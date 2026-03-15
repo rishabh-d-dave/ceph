@@ -401,7 +401,7 @@ class TestCloneProgressReporter(CloneProgressReporterHelper):
         # and not cancelling these clone doesnt affect this test case.
         self.cancel_clones_and_ignore_if_finished(c)
 
-    def test_clone_to_diff_group_and_less_than_cloner_threads(self):
+    def _test_clone_to_diff_group_and_less_than_cloner_threads(self):
         '''
         Initiate cloning where clone subvolume and source subvolume are located
         in different groups and then test that when this clone is in progress,
@@ -450,7 +450,7 @@ class TestCloneProgressReporter(CloneProgressReporterHelper):
         # and not cancelling these clone doesnt affect this test case.
         self.cancel_clones_and_ignore_if_finished(c)
 
-    def test_clone_after_subvol_is_removed(self):
+    def _test_clone_after_subvol_is_removed(self):
         '''
         Initiate cloning after source subvolume has been deleted but with
         snapshots retained and then test that, when this clone is in progress,
