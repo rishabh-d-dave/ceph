@@ -11,4 +11,8 @@ tasks:
         - tasks.cephfs.volumes.test_v3_features
         - tasks.cephfs.volumes.upgrades.test_v2_to_v3
         - tasks.cephfs.volumes.upgrades.test_v1_to_v3
+        - tasks.cephfs.volumes.upgrades.test_pre_v3
+        - tasks.cephfs.test_volumes.TestSubvolV2
+        - tasks.cephfs.test_volumes.TestSubvolV1
+        - tasks.cephfs.test_volumes.TestSubvolV0
         - tasks.cephfs.test_volumes.TestCorruptedSubvolumes
