@@ -37,7 +37,8 @@ class V3Compat:
     '''
 
     def has_snaps(self):
-        return self.list_snapshots()
+        # will be updated in subsequent commits.
+        return False
 
 
 class SubvolumeV1(SubvolumeBase, SubvolumeTemplate, V3Compat):
