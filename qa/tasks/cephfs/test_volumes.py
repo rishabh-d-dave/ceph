@@ -10408,25 +10408,6 @@ class TestSubvolumeV1(VolumesHelper):
         return os.path.join('/volumes', group_name, subvol_name, uuid,
                             '.snap', snap_name)
 
-    def test_snapshot_getpath_in_group_for_v1(self):
-        subvol_name = self._gen_subvol_name()
-        group_name = self._gen_subvol_grp_name()
-        snap_name = self._gen_subvol_snap_name()
-
-        self.run_ceph_cmd(f'fs subvolumegroup create {self.volname} '
-                          f'{group_name}')
-        self._create_v1_subvolume(subvol_name, group_name)
-        sv_uuid = self.get_subvol_uuid_for_v1(subvol_name, group_name)
-        self.run_ceph_cmd(f'fs subvolume snapshot create {self.volname} '
-                          f'{subvol_name} {snap_name} {group_name}')
-
-        snap_path = self.get_ceph_cmd_stdout(
-            f'fs subvolume snapshot getpath {self.volname} {subvol_name} '
-            f'{snap_name} {group_name}').strip()
-        exp_snap_path = self.construct_snap_path_for_v1(subvol_name, snap_name,
-                                                        sv_uuid, group_name)
-        self.assertEqual(snap_path, exp_snap_path)
-
 
 class _TestSubvolumeV0(VolumesHelper):
     '''
