@@ -355,6 +355,17 @@ class SubvolumeV2(SubvolumeV1):
         except cephfs.Error as e:
             raise VolumeException(-e.args[0], e.args[1])
 
+    def link(self, tgt_dir_path):
+        try:
+            self.metadata_mgr.refresh()
+            uuid_ = basename(self.path)
+            self.fs.rmdir(self.path)
+            self.fs.symlink(tgt_dir_path, uuid_)
+            self.metadata_mgr.update_global_section('type', 'linked')
+            self.metadata_mgr.update_global_section('path', tgt_dir_path)
+        except:
+            raise
+
     def trash_incarnation_dir(self, subvol_path):
         """rename subvolume (uuid component) to trash"""
         self.create_trashcan()

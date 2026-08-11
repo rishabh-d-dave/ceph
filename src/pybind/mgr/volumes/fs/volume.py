@@ -501,6 +501,23 @@ class VolumeClient(CephfsClient["Module"]):
             ret = self.volume_exception_to_retval(ve)
         return ret
 
+    def subvolume_link(self, **kwargs):
+        ret             = None
+        vol_name        = kwargs['vol_name']
+        subvol_name     = kwargs['subvol_name']
+        tgt_dir_path    = kwargs['tgt_dir_path']
+        svg_name        = kwargs['subvol_grp_name']
+
+        try:
+            with open_subvol_in_vol(self, self.volspec, vol_name, svg_name,
+                                    subvol_name, SubvolumeOpType.SUBVOL_LINK) \
+                                            as subvol:
+                ret = subvol.link(tgt_dir_path)
+        except VolumeException as ve:
+            ret = self.volume_exception_to_retval(ve)
+
+        return ret
+
     def subvolume_info(self, **kwargs):
         ret        = None
         volname    = kwargs['vol_name']

@@ -226,6 +226,15 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
             'perm': 'rw'
         },
         {
+            'cmd': 'fs subvolume link '
+                   'name=vol_name,type=CephString '
+                   'name=subvol_name,type=CephString '
+                   'name=tgt_dir_path,type=CephString '
+                   'name=group_name,type=CephString,req=false ',
+            'desc': 'Links a regular CephFS dir to subvolume mount path',
+            'perm': 'rw'
+        },
+        {
             'cmd': 'fs subvolume info '
                    'name=vol_name,type=CephString '
                    'name=sub_name,type=CephString '
@@ -895,6 +904,12 @@ class Module(orchestrator.OrchestratorClientMixin, MgrModule):
         return self.vc.subvolume_getpath(vol_name=cmd['vol_name'],
                                          sub_name=cmd['sub_name'],
                                          group_name=cmd.get('group_name', None))
+
+    @mgr_cmd_wrap
+    def _cmd_fs_subvolume_link(self, inbuf, cmd):
+        return self.vc.subvolume_link(cmd['vol_name'], cmd['subvol_name'],
+                                      cmd['tgt_dir_path'],
+                                      cmd.get('subvol_grp_name', None))
 
     @mgr_cmd_wrap
     def _cmd_fs_subvolume_info(self, inbuf, cmd):
