@@ -10182,146 +10182,10 @@ class TestSubvolumeSnapshotVisibilityMgr(TestVolumesHelper):
         self.set_client_snapshot_visbility_flag("client", "false")
 
 
-class TestMisc(TestVolumesHelper):
-    """Miscellaneous tests related to FS volume, subvolume group, and subvolume operations."""
-    def test_connection_expiration(self):
-        # unmount any cephfs mounts
-        for i in range(0, self.CLIENTS_REQUIRED):
-            self.mounts[i].umount_wait()
-        sessions = self._session_list()
-        self.assertLessEqual(len(sessions), 1) # maybe mgr is already mounted
-
-        # Get the mgr to definitely mount cephfs
-        subvolume = self._gen_subvol_name()
-        self._fs_cmd("subvolume", "create", self.volname, subvolume)
-        sessions = self._session_list()
-        self.assertEqual(len(sessions), 1)
-
-        # Now wait for the mgr to expire the connection:
-        self.wait_until_evicted(sessions[0]['id'], timeout=90)
-
-    def test_mgr_eviction(self):
-        # unmount any cephfs mounts to start from a clean state
-        for i in range(0, self.CLIENTS_REQUIRED):
-            self.mounts[i].umount_wait()
-
-        # Helper to get mgr-specific sessions (type 16)
-        def get_mgr_sessions():
-            all_sessions = self._session_list()
-            mgr_sessions = [s for s in all_sessions if s.get('auth_name', {}).get('type') == 16]
-            return all_sessions, mgr_sessions
-
-        # Ensure we start with only mgr sessions (if any)
-        all_s, mgr_s = get_mgr_sessions()
-        self.assertEqual(len(all_s), len(mgr_s), f"Non-mgr sessions found: {all_s}")
-
-        # Trigger mgr activity to ensure sessions are active
-        subvolume = self._gen_subvol_name()
-        self._fs_cmd("subvolume", "create", self.volname, subvolume)
-
-        # Get updated session list and verify they are all mgr types
-        all_sessions, mgr_sessions = get_mgr_sessions()
-        self.assertGreaterEqual(len(mgr_sessions), 1)
-        self.assertEqual(len(all_sessions), len(mgr_sessions),
-                         f"Unexpected session types found: {all_sessions}")
-
-        # Store IDs for eviction check
-        mgr_session_ids = [s['id'] for s in mgr_sessions]
-
-        # Fail the mgr
-        mgr_id = self.mgr_cluster.get_active_id()
-        self.mgr_cluster.mgr_fail(mgr_id)
-
-        # Assert all identified mgr session IDs are evicted
-        for s_id in mgr_session_ids:
-            self.wait_until_evicted(s_id)
-
-    def test_names_can_only_be_goodchars(self):
-        """
-        Test the creating vols, subvols subvolgroups fails when their names uses
-        characters beyond [a-zA-Z0-9 -_.].
-        """
-        volname, badname = 'testvol', 'abcd@#'
-
-        with self.assertRaises(CommandFailedError):
-            self._fs_cmd('volume', 'create', badname)
-        self._fs_cmd('volume', 'create', volname)
-
-        with self.assertRaises(CommandFailedError):
-            self._fs_cmd('subvolumegroup', 'create', volname, badname)
-
-        with self.assertRaises(CommandFailedError):
-            self._fs_cmd('subvolume', 'create', volname, badname)
-        self._fs_cmd('volume', 'rm', volname, '--yes-i-really-mean-it')
-
-    def test_subvolume_ops_on_nonexistent_vol(self):
-        # tests the fs subvolume operations on non existing volume
-
-        volname = "non_existent_subvolume"
-
-        # try subvolume operations
-        for op in ("create", "rm", "getpath", "info", "resize", "pin", "ls"):
-            try:
-                if op == "resize":
-                    self._fs_cmd("subvolume", "resize", volname, "subvolname_1", "inf")
-                elif op == "pin":
-                    self._fs_cmd("subvolume", "pin", volname, "subvolname_1", "export", "1")
-                elif op == "ls":
-                    self._fs_cmd("subvolume", "ls", volname)
-                else:
-                    self._fs_cmd("subvolume", op, volname, "subvolume_1")
-            except CommandFailedError as ce:
-                self.assertEqual(ce.exitstatus, errno.ENOENT)
-            else:
-                self.fail("expected the 'fs subvolume {0}' command to fail".format(op))
-
-        # try subvolume snapshot operations and clone create
-        for op in ("create", "rm", "info", "protect", "unprotect", "ls", "clone"):
-            try:
-                if op == "ls":
-                    self._fs_cmd("subvolume", "snapshot", op, volname, "subvolume_1")
-                elif op == "clone":
-                    self._fs_cmd("subvolume", "snapshot", op, volname, "subvolume_1", "snapshot_1", "clone_1")
-                else:
-                    self._fs_cmd("subvolume", "snapshot", op, volname, "subvolume_1", "snapshot_1")
-            except CommandFailedError as ce:
-                self.assertEqual(ce.exitstatus, errno.ENOENT)
-            else:
-                self.fail("expected the 'fs subvolume snapshot {0}' command to fail".format(op))
-
-        # try, clone status
-        try:
-            self._fs_cmd("clone", "status", volname, "clone_1")
-        except CommandFailedError as ce:
-            self.assertEqual(ce.exitstatus, errno.ENOENT)
-        else:
-            self.fail("expected the 'fs clone status' command to fail")
-
-        # try subvolumegroup operations
-        for op in ("create", "rm", "getpath", "pin", "ls"):
-            try:
-                if op == "pin":
-                    self._fs_cmd("subvolumegroup", "pin", volname, "group_1", "export", "0")
-                elif op == "ls":
-                    self._fs_cmd("subvolumegroup", op, volname)
-                else:
-                    self._fs_cmd("subvolumegroup", op, volname, "group_1")
-            except CommandFailedError as ce:
-                self.assertEqual(ce.exitstatus, errno.ENOENT)
-            else:
-                self.fail("expected the 'fs subvolumegroup {0}' command to fail".format(op))
-
-        # try subvolumegroup snapshot operations
-        for op in ("create", "rm", "ls"):
-            try:
-                if op == "ls":
-                    self._fs_cmd("subvolumegroup", "snapshot", op, volname, "group_1")
-                else:
-                    self._fs_cmd("subvolumegroup", "snapshot", op, volname, "group_1", "snapshot_1")
-            except CommandFailedError as ce:
-                self.assertEqual(ce.exitstatus, errno.ENOENT)
-            else:
-                self.fail("expected the 'fs subvolumegroup snapshot {0}' command to fail".format(op))
+class TestUpgrade(TestVolumesHelper):
+    '''
+    Tests related subvolume upgrade.
+    '''
 
     def test_subvolume_upgrade_legacy_to_v1(self):
         """
@@ -10483,7 +10347,7 @@ class TestMisc(TestVolumesHelper):
         # verify trash dir is clean
         self._wait_for_trash_empty()
 
-    def _test_subvolume_no_upgrade_v1_to_v2(self):
+    def test_subvolume_no_upgrade_v1_to_v2(self):
         """
         poor man's upgrade test -- theme continues...
         ensure v1 to v2 upgrades are not done automatically due to various states of v1
@@ -10541,7 +10405,7 @@ class TestMisc(TestVolumesHelper):
         # verify trash dir is clean
         self._wait_for_trash_empty()
 
-    def _test_subvolume_upgrade_v1_to_v2(self):
+    def test_subvolume_upgrade_v1_to_v2(self):
         """
         poor man's upgrade test -- theme continues...
         ensure v1 to v2 upgrades work
@@ -10711,6 +10575,148 @@ class TestMisc(TestVolumesHelper):
 
         # remove group
         self._fs_cmd("subvolumegroup", "rm", self.volname, group)
+
+
+class TestMisc(TestVolumesHelper):
+    """Miscellaneous tests related to FS volume, subvolume group, and subvolume operations."""
+    def test_connection_expiration(self):
+        # unmount any cephfs mounts
+        for i in range(0, self.CLIENTS_REQUIRED):
+            self.mounts[i].umount_wait()
+        sessions = self._session_list()
+        self.assertLessEqual(len(sessions), 1) # maybe mgr is already mounted
+
+        # Get the mgr to definitely mount cephfs
+        subvolume = self._gen_subvol_name()
+        self._fs_cmd("subvolume", "create", self.volname, subvolume)
+        sessions = self._session_list()
+        self.assertEqual(len(sessions), 1)
+
+        # Now wait for the mgr to expire the connection:
+        self.wait_until_evicted(sessions[0]['id'], timeout=90)
+
+    def test_mgr_eviction(self):
+        # unmount any cephfs mounts to start from a clean state
+        for i in range(0, self.CLIENTS_REQUIRED):
+            self.mounts[i].umount_wait()
+
+        # Helper to get mgr-specific sessions (type 16)
+        def get_mgr_sessions():
+            all_sessions = self._session_list()
+            mgr_sessions = [s for s in all_sessions if s.get('auth_name', {}).get('type') == 16]
+            return all_sessions, mgr_sessions
+
+        # Ensure we start with only mgr sessions (if any)
+        all_s, mgr_s = get_mgr_sessions()
+        self.assertEqual(len(all_s), len(mgr_s), f"Non-mgr sessions found: {all_s}")
+
+        # Trigger mgr activity to ensure sessions are active
+        subvolume = self._gen_subvol_name()
+        self._fs_cmd("subvolume", "create", self.volname, subvolume)
+
+        # Get updated session list and verify they are all mgr types
+        all_sessions, mgr_sessions = get_mgr_sessions()
+        self.assertGreaterEqual(len(mgr_sessions), 1)
+        self.assertEqual(len(all_sessions), len(mgr_sessions),
+                         f"Unexpected session types found: {all_sessions}")
+
+        # Store IDs for eviction check
+        mgr_session_ids = [s['id'] for s in mgr_sessions]
+
+        # Fail the mgr
+        mgr_id = self.mgr_cluster.get_active_id()
+        self.mgr_cluster.mgr_fail(mgr_id)
+
+        # Assert all identified mgr session IDs are evicted
+        for s_id in mgr_session_ids:
+            self.wait_until_evicted(s_id)
+
+    def test_names_can_only_be_goodchars(self):
+        """
+        Test the creating vols, subvols subvolgroups fails when their names uses
+        characters beyond [a-zA-Z0-9 -_.].
+        """
+        volname, badname = 'testvol', 'abcd@#'
+
+        with self.assertRaises(CommandFailedError):
+            self._fs_cmd('volume', 'create', badname)
+        self._fs_cmd('volume', 'create', volname)
+
+        with self.assertRaises(CommandFailedError):
+            self._fs_cmd('subvolumegroup', 'create', volname, badname)
+
+        with self.assertRaises(CommandFailedError):
+            self._fs_cmd('subvolume', 'create', volname, badname)
+        self._fs_cmd('volume', 'rm', volname, '--yes-i-really-mean-it')
+
+    def test_subvolume_ops_on_nonexistent_vol(self):
+        # tests the fs subvolume operations on non existing volume
+
+        volname = "non_existent_subvolume"
+
+        # try subvolume operations
+        for op in ("create", "rm", "getpath", "info", "resize", "pin", "ls"):
+            try:
+                if op == "resize":
+                    self._fs_cmd("subvolume", "resize", volname, "subvolname_1", "inf")
+                elif op == "pin":
+                    self._fs_cmd("subvolume", "pin", volname, "subvolname_1", "export", "1")
+                elif op == "ls":
+                    self._fs_cmd("subvolume", "ls", volname)
+                else:
+                    self._fs_cmd("subvolume", op, volname, "subvolume_1")
+            except CommandFailedError as ce:
+                self.assertEqual(ce.exitstatus, errno.ENOENT)
+            else:
+                self.fail("expected the 'fs subvolume {0}' command to fail".format(op))
+
+        # try subvolume snapshot operations and clone create
+        for op in ("create", "rm", "info", "protect", "unprotect", "ls", "clone"):
+            try:
+                if op == "ls":
+                    self._fs_cmd("subvolume", "snapshot", op, volname, "subvolume_1")
+                elif op == "clone":
+                    self._fs_cmd("subvolume", "snapshot", op, volname, "subvolume_1", "snapshot_1", "clone_1")
+                else:
+                    self._fs_cmd("subvolume", "snapshot", op, volname, "subvolume_1", "snapshot_1")
+            except CommandFailedError as ce:
+                self.assertEqual(ce.exitstatus, errno.ENOENT)
+            else:
+                self.fail("expected the 'fs subvolume snapshot {0}' command to fail".format(op))
+
+        # try, clone status
+        try:
+            self._fs_cmd("clone", "status", volname, "clone_1")
+        except CommandFailedError as ce:
+            self.assertEqual(ce.exitstatus, errno.ENOENT)
+        else:
+            self.fail("expected the 'fs clone status' command to fail")
+
+        # try subvolumegroup operations
+        for op in ("create", "rm", "getpath", "pin", "ls"):
+            try:
+                if op == "pin":
+                    self._fs_cmd("subvolumegroup", "pin", volname, "group_1", "export", "0")
+                elif op == "ls":
+                    self._fs_cmd("subvolumegroup", op, volname)
+                else:
+                    self._fs_cmd("subvolumegroup", op, volname, "group_1")
+            except CommandFailedError as ce:
+                self.assertEqual(ce.exitstatus, errno.ENOENT)
+            else:
+                self.fail("expected the 'fs subvolumegroup {0}' command to fail".format(op))
+
+        # try subvolumegroup snapshot operations
+        for op in ("create", "rm", "ls"):
+            try:
+                if op == "ls":
+                    self._fs_cmd("subvolumegroup", "snapshot", op, volname, "group_1")
+                else:
+                    self._fs_cmd("subvolumegroup", "snapshot", op, volname, "group_1", "snapshot_1")
+            except CommandFailedError as ce:
+                self.assertEqual(ce.exitstatus, errno.ENOENT)
+            else:
+                self.fail("expected the 'fs subvolumegroup snapshot {0}' command to fail".format(op))
 
     def test_dangling_symlink(self):
         """
