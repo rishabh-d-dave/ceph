@@ -42,14 +42,14 @@ class SubvolumeLoader(object):
             raise VolumeException(-errno.EINVAL, "no subvolume version available")
         log.info("max subvolume version is v{0}".format(self.max_version))
 
-    def _get_subvolume_version(self, version):
+    def get_subvolume_class(self, version):
         try:
             return self.versions[version]
         except KeyError:
             raise VolumeException(-errno.EINVAL, "subvolume class v{0} does not exist".format(version))
 
     def get_subvolume_object_max(self, mgr, fs, vol_spec, group, subvolname):
-        return self._get_subvolume_version(self.max_version)(mgr, fs, vol_spec, group, subvolname)
+        return self.get_subvolume_class(self.max_version)(mgr, fs, vol_spec, group, subvolname)
 
     def allow_subvolume_upgrade(self, subvolume):
         asu = True
@@ -75,7 +75,7 @@ class SubvolumeLoader(object):
         if not self.allow_subvolume_upgrade(subvolume):
             return
 
-        v1_subvolume = self._get_subvolume_version(version)(subvolume.mgr, subvolume.fs, subvolume.vol_spec, subvolume.group, subvolume.subvolname)
+        v1_subvolume = self.get_subvolume_class(version)(subvolume.mgr, subvolume.fs, subvolume.vol_spec, subvolume.group, subvolume.subvolname)
         try:
             v1_subvolume.open(SubvolumeOpType.SNAP_LIST)
         except VolumeException as ve:
