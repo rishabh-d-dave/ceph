@@ -10,6 +10,7 @@ import ipaddress
 from io import StringIO
 from contextlib import contextmanager
 from textwrap import dedent
+from threading import Thread
 
 from teuthology.contextutil import safe_while
 from teuthology.misc import get_file, write_file
@@ -1273,6 +1274,29 @@ class CephFSMountBase(object):
                                "count={0}".format(int(n_mb)),
                                "seek={0}".format(int(seek))
                                ], wait=wait)
+
+    # TODO implement timeout
+    def _write_files_in_bg(self, path, should_stop=lambda: False,
+                           timeout=60*60*15, sleep=0):
+        self.num_of_files_wrote_in_bg = 0
+        file_count = 1
+
+        while True:
+            if should_stop():
+                break
+
+            self.run_shell(f'echo abcd > {path}/file-{file_count}')
+            time.sleep(sleep)
+            file_count += 1
+
+        self.num_of_files_wrote_in_bg = file_count
+
+    def write_files_in_bg(self, path, should_stop=lambda: False,
+                          timeout=60*60*15, sleep=0):
+        t1 = Thread(target=self._write_files_in_bg, args=(path, should_stop,
+                                                          timeout, sleep))
+        t1.start()
+        return t1
 
     def write_test_pattern(self, filename, size):
         log.info("Writing {0} bytes to {1}".format(size, filename))

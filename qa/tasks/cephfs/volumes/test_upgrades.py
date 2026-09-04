@@ -1,7 +1,5 @@
 from os import urandom
 from os.path import join, basename, dirname
-from json import loads as json_loads
-from uuid import uuid4
 from logging import getLogger
 from textwrap import dedent
 
