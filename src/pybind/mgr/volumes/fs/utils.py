@@ -11,7 +11,7 @@ log = getLogger(__name__)
 
 def ensure_uuid_is_valid(uuid):
     '''
-    If UUID is invaid, raise InvalidUuidException.
+    If UUID is invaid, raise InvalidUuidError.
     '''
     uuid_type = type(uuid)
     if uuid_type is str:
@@ -26,7 +26,7 @@ def ensure_uuid_is_valid(uuid):
     try:
         UUID(uuid, version=4)
     except Exception as e:
-        raise InvalidUuidException(EINVAL,
+        raise InvalidUuidError(EINVAL,
                                    (f'received invalid uuid. uuid = {uuid}. '
                                     f'exception raised by uuid module: {e}'))
 
