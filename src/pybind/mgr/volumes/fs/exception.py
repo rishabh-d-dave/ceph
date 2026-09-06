@@ -70,3 +70,18 @@ class ClusterError(Exception):
 
 class EvictionError(Exception):
     pass
+
+
+class SubvolUpgradeError(Exception):
+    '''
+    Raised when subvolume can't be auto-upgraded.
+    '''
+
+    def __init__(self, errno, errmsg):
+        self.errno = errno
+        self.errmsg = errmsg
+        log.info(str(self))
+
+    def __str__(self):
+        return (f'{self.__class__.__name__}: errno = {self.errno}, '
+                f'errmsg = {self.errmsg}')

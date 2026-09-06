@@ -1,10 +1,12 @@
-import os
 import stat
 
 import errno
 import logging
 import hashlib
+from os import strerror
+from os.path import join, split, basename, dirname
 from typing import Dict, Union
+from uuid import UUID
 
 import cephfs
 
@@ -37,6 +39,7 @@ class SubvolumeBase(object):
         self.vol_spec = vol_spec
         self.group = group
         self.subvolname = subvolname
+        self.name = self.subvolname
         self.legacy_mode = legacy
         self.load_config()
 
@@ -66,15 +69,15 @@ class SubvolumeBase(object):
 
     @property
     def base_path(self):
-        return os.path.join(self.group.path, self.subvolname.encode('utf-8'))
+        return join(self.group.path, self.subvolname.encode('utf-8'))
 
     @property
     def config_path(self):
-        return os.path.join(self.base_path, b".meta")
+        return join(self.base_path, b".meta")
 
     @property
     def legacy_dir(self):
-        return (os.path.join(self.vol_spec.base_dir.encode('utf-8'),
+        return (join(self.vol_spec.base_dir.encode('utf-8'),
                 SubvolumeBase.LEGACY_CONF_DIR.encode('utf-8')))
 
     @property
@@ -89,7 +92,7 @@ class SubvolumeBase(object):
                                       "require python's hashlib library to support usedforsecurity flag in FIPS enabled systems")
 
         meta_config = "{0}.meta".format(m.hexdigest())
-        return os.path.join(self.legacy_dir, meta_config.encode('utf-8'))
+        return join(self.legacy_dir, meta_config.encode('utf-8'))
 
     @property
     def namespace(self):
@@ -284,7 +287,7 @@ class SubvolumeBase(object):
             try:
                 self.fs.getxattr(path, 'ceph.dir.layout.pool').decode('utf-8')
             except cephfs.NoData:
-                xattr_val = get_ancestor_xattr(self.fs, os.path.split(path)[0],
+                xattr_val = get_ancestor_xattr(self.fs, split(path)[0],
                                                "ceph.dir.layout.pool")
         if xattr_key and xattr_val:
             try:
@@ -465,6 +468,14 @@ class SubvolumeBase(object):
         self.metadata_mgr.flush()
 
     def discover(self):
+        '''
+        Figure out subvolume version and return version number.
+
+        v1 -> 1
+        v2 -> 2
+        v3 -> 3
+        legacy -> 0
+        '''
         log.debug("discovering subvolume "
                   "'{0}' [mode: {1}]".format(self.subvolname, "legacy"
                                              if self.legacy_mode else "new"))
@@ -472,17 +483,44 @@ class SubvolumeBase(object):
             self.fs.stat(self.base_path)
             self.metadata_mgr.refresh()
             log.debug("loaded subvolume '{0}'".format(self.subvolname))
-            subvol_data_path = self.metadata_mgr.get_global_option(MetadataManager.GLOBAL_META_KEY_PATH)
-            subvol_path_v2 = os.path.dirname(subvol_data_path)
-            subvol_path_v3 = os.path.dirname(os.path.dirname(os.path.dirname(subvol_data_path)))
+
+            sv_data_path = self.metadata_mgr.get_global_option('path')
+            # trailing slash messes up basename/dirname results
+            if sv_data_path[-1] == '/':
+                sv_data_path = sv_data_path[:-1]
+            log.info(f'sv_data_path = {sv_data_path}')
+            if basename(sv_data_path) == 'mnt':     # implies v3
+                sv_uuid = basename(dirname(sv_data_path))
+                sv_path = dirname(dirname(dirname(sv_data_path)))
+            else:   # TODO: it could also be legacy
+                sv_uuid = basename(sv_data_path)
+                sv_path = dirname(sv_data_path)
+            log.info(f'sv_path = {sv_path}')
+
+            try:
+                UUID(sv_uuid, version=4)
+            except ValueError:
+                raise AssertionError('found false UUID')
+
             base_path = self.base_path.decode('utf-8')
+            log.info(f'mark123 base_path = {base_path}')
+            log.info(f'mark123 self.legacy_mode = {self.legacy_mode}')
+            log.info(f'mark123 self.state = {self.state}')
+            # TODO: after v3 upgrades are done, this "fabricated stuff" needs
+            # to removed...
             # subvolume with retained snapshots has empty path, don't mistake it for
             # fabricated metadata.
             if (not self.legacy_mode and
                 self.state != SubvolumeStates.STATE_RETAINED and
-                base_path != subvol_path_v2 and
-                base_path != subvol_path_v3):
+                base_path != sv_path):
                 raise MetadataMgrException(-errno.ENOENT, 'fabricated .meta')
+
+            sv_version = int(self.metadata_mgr.get_global_option('version'))
+            # TODO update eventually to use subvol classes for subvol version
+            # instead of literals
+            assert sv_version in (0, 1, 2, 3), \
+                    f'invalid version number: version {sv_version} doesnt exist'
+            return sv_version
         except MetadataMgrException as me:
             if me.errno in (-errno.ENOENT, -errno.EINVAL) and not self.legacy_mode:
                 log.warn("subvolume '{0}', {1}, "
@@ -490,6 +528,7 @@ class SubvolumeBase(object):
                 self.legacy_mode = True
                 self.load_config()
                 self.discover()
+                return 0
             else:
                 raise
         except cephfs.Error as e:
@@ -666,7 +705,7 @@ class SubvolumeBase(object):
             self.metadata_mgr.flush()
         except MetadataMgrException as me:
             log.error(f"Failed to set user metadata key={keyname} value={value} on subvolume={self.subvol_name} "
-                      f"group={self.group_name} reason={me.args[1]}, errno:{-me.args[0]}, {os.strerror(-me.args[0])}")
+                      f"group={self.group_name} reason={me.args[1]}, errno:{-me.args[0]}, {strerror(-me.args[0])}")
             raise VolumeException(-me.args[0], me.args[1])
 
     def get_user_metadata(self, keyname):
@@ -691,7 +730,7 @@ class SubvolumeBase(object):
             if me.errno == -errno.ENOENT:
                 raise VolumeException(-errno.ENOENT, "subvolume metadata does not exist")
             log.error(f"Failed to remove user metadata key={keyname} on subvolume={self.subvol_name} "
-                      f"group={self.group_name} reason={me.args[1]}, errno:{-me.args[0]}, {os.strerror(-me.args[0])}")
+                      f"group={self.group_name} reason={me.args[1]}, errno:{-me.args[0]}, {strerror(-me.args[0])}")
             raise VolumeException(-me.args[0], me.args[1])
 
     def get_snap_section_name(self, snapname):
@@ -707,7 +746,7 @@ class SubvolumeBase(object):
         except MetadataMgrException as me:
             log.error(f"Failed to set snapshot metadata key={keyname} value={value} on snap={snapname} "
                       f"subvolume={self.subvol_name} group={self.group_name} "
-                      f"reason={me.args[1]}, errno:{-me.args[0]}, {os.strerror(-me.args[0])}")
+                      f"reason={me.args[1]}, errno:{-me.args[0]}, {strerror(-me.args[0])}")
             raise VolumeException(-me.args[0], me.args[1])
 
     def get_snapshot_metadata(self, snapname, keyname):
@@ -718,7 +757,7 @@ class SubvolumeBase(object):
                 raise VolumeException(-errno.ENOENT, "key '{0}' does not exist.".format(keyname))
             log.error(f"Failed to get snapshot metadata key={keyname} on snap={snapname} "
                       f"subvolume={self.subvol_name} group={self.group_name} "
-                      f"reason={me.args[1]}, errno:{-me.args[0]}, {os.strerror(-me.args[0])}")
+                      f"reason={me.args[1]}, errno:{-me.args[0]}, {strerror(-me.args[0])}")
             raise VolumeException(-me.args[0], me.args[1])
         return value
 
@@ -736,14 +775,14 @@ class SubvolumeBase(object):
                 raise VolumeException(-errno.ENOENT, "snapshot metadata not does not exist")
             log.error(f"Failed to remove snapshot metadata key={keyname} on snap={snapname} "
                       f"subvolume={self.subvol_name} group={self.group_name} "
-                      f"reason={me.args[1]}, errno:{-me.args[0]}, {os.strerror(-me.args[0])}")
+                      f"reason={me.args[1]}, errno:{-me.args[0]}, {strerror(-me.args[0])}")
             raise VolumeException(-me.args[0], me.args[1])
 
     def snapshot_visibility_set(self, value):
         if value not in ("true", "false"):
             raise VolumeException(-errno.EINVAL, "snapshot visibility value invalid")
 
-        subvol_root_path = os.path.dirname(self.path)
+        subvol_root_path = dirname(self.path)
         subvol_v2_path = self.path
         snaps_visibility_vxattr = "ceph.dir.subvolume.snaps.visible"
         subvolume_size = 0
@@ -791,7 +830,7 @@ class SubvolumeBase(object):
             raise VolumeException(-e.args[0], e.args[1])
 
     def snapshot_visibility_get(self):
-        subvol_parent_path = os.path.dirname(self.path)
+        subvol_parent_path = dirname(self.path)
         try:
             return self.fs.getxattr(subvol_parent_path,
                                     "ceph.dir.subvolume.snaps.visible").decode('utf-8')

@@ -9,10 +9,13 @@ from .subvolume_base import SubvolumeBase
 from .subvolume_attrs import SubvolumeTypes
 from .subvolume_v1 import SubvolumeV1
 from .subvolume_v2 import SubvolumeV2
+from .subvolume_v3 import SubvolumeV3
 from .metadata_manager import MetadataManager
 from .op_sm import SubvolumeOpSm
 from ..template import SubvolumeOpType
-from ...exception import MetadataMgrException, OpSmException, VolumeException
+from ...fs_util import statx_path
+from ...exception import (MetadataMgrException, OpSmException, VolumeException,
+                          SubvolUpgradeError)
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +54,7 @@ class SubvolumeLoader(object):
     def get_subvolume_object_max(self, mgr, fs, vol_spec, group, subvolname):
         return self.get_subvolume_class(self.max_version)(mgr, fs, vol_spec, group, subvolname)
 
-    def allow_subvolume_upgrade(self, subvolume):
+    def allow_subvol_upgrade_from_v1_to_v2(self, subvolume):
         asu = True
         try:
             opt = subvolume.metadata_mgr.get_global_option(MetadataManager.GLOBAL_META_KEY_ALLOW_SUBVOLUME_UPGRADE)
@@ -63,33 +66,112 @@ class SubvolumeLoader(object):
 
         return asu
 
-    def upgrade_to_v2_subvolume(self, subvolume):
-        # legacy mode subvolumes cannot be upgraded to v2
-        if subvolume.legacy_mode:
-            return
+    def upgrade_subvol_from_v2_to_v3(self, base_subvol, sv_version):
+        v2_sv_uuid_path = base_subvol.metadata_mgr.get_global_option('path')
+        sv_path = dirname(v2_sv_uuid_path)
+        sv_uuid = basename(v2_sv_uuid_path)
 
-        version = int(subvolume.metadata_mgr.get_global_option('version'))
-        if version >= SubvolumeV2.version():
-            return
-
-        if not self.allow_subvolume_upgrade(subvolume):
-            return
-
-        v1_subvolume = self.get_subvolume_class(version)(subvolume.mgr, subvolume.fs, subvolume.vol_spec, subvolume.group, subvolume.subvolname)
+        log.info(f'upgrading subvol {base_subvol.name} from v2 to v3, '
+                 'upgrading its layout...')
         try:
-            v1_subvolume.open(SubvolumeOpType.SNAP_LIST)
+            uid, gid, mode = statx_path(base_subvol.fs, v2_sv_uuid_path,
+                                        ('uid', 'gid', 'mode'))
+
+            v3_sv_mnt_path = f'{sv_path}/roots/{sv_uuid}/mnt'
+            v3_sv_uuid_path = f'{sv_path}/roots/{sv_uuid}'
+            sv_meta_path = f'{sv_path}/.meta'
+            sv_incar_meta_path = f'{sv_path}/.meta.{sv_uuid}'
+
+            base_subvol.fs.mkdirs(v3_sv_uuid_path, 0o755)
+            base_subvol.fs.rename(v2_sv_uuid_path, v3_sv_mnt_path)
+            base_subvol.fs.chown(v3_sv_mnt_path, uid, gid)
+            base_subvol.fs.chmod(v3_sv_mnt_path, mode)
+
+            base_subvol.fs.rename(sv_meta_path, sv_incar_meta_path)
+            base_subvol.fs.symlink(f'.meta.{sv_uuid}', sv_meta_path)
+            base_subvol.fs.chown(sv_incar_meta_path, 0, 0)
+            base_subvol.fs.chmod(sv_incar_meta_path, 644)
+        except cephfs.Error as e:
+            raise SubvolUpgradeError(-e.args[0],
+                                     f'error upgrading subvol {base_subvol.name} '
+                                     'from v2 to v3')
+
+        log.info(f'layout upgrade for subvol {base_subvol.name} was '
+                 'successful, updating its metadata file...')
+
+        v3_subvol = SubvolumeV3(base_subvol.mgr, base_subvol.fs,
+                                base_subvol.vol_spec, base_subvol.group,
+                                base_subvol.name, uuid=sv_uuid)
+        v3_subvol.metadata_mgr.refresh()
+
+        try:
+            # meta file path for v3 is different, hence we need v3 subvol obj
+            v3_subvol.metadata_mgr.update_global_section('version',
+                                                         v3_subvol.version())
+            v3_subvol.metadata_mgr.update_global_section(
+                    'path', v3_subvol.mnt_dir.decode('utf-8'))
+            v3_subvol.metadata_mgr.flush()
+        except MetadataMgrException as e:
+            raise VolumeException(-e.args[0],
+                                  'error updating subvol metadata during '
+                                  'subvol upgrade from v2 to v3')
+
+        log.info(f'upgrade for subvol {base_subvol.name} from v2 to v3 '
+                 'is complete')
+        return v3_subvol
+
+    def upgrade_subvol_to_v3(self, base_subvol, sv_version):
+        assert sv_version != SubvolumeV3.version()
+
+        if sv_version == 2:
+            return self.upgrade_subvol_from_v2_to_v3(base_subvol, sv_version)
+        elif sv_version == 1:
+            assert False
+        elif sv_version == 0:
+            assert False
+        else:
+            assert False
+
+    def upgrade_to_v2_subvolume(self, base_subvol, sv_version):
+        if base_subvol.legacy_mode:
+            raise SubvolUpgradeError(errno.ENOTSUP,
+                                     f'legacy subvol {base_subvol.name} '
+                                     'cant be upgraded to v2')
+        assert sv_version == SubvolumeV2.version()
+
+        if not self.allow_subvol_upgrade_from_v1_to_v2(base_subvol):
+            raise SubvolUpgradeError(errno.ENOTSUP,
+                                     f'v1 subvol {base_subvol.name} cant '
+                                     'be upgraded to v2')
+
+        log.info(f'upgrading subvol {base_subvol.name} from v1 to v2...')
+        v1_subvol = SubvolumeV1(base_subvol.mgr, base_subvol.fs,
+                                base_subvol.vol_spec, base_subvol.group,
+                                base_subvol.name)
+        try:
+            v1_subvol.open(SubvolumeOpType.SNAP_LIST)
         except VolumeException as ve:
-            # if volume is not ready for snapshot listing, do not upgrade at present
             if ve.errno == -errno.EAGAIN:
-                return
+                raise SubvolUpgradeError(errno.EAGAIN,
+                                         f'v1 subvol {base_subvol.name} '
+                                         'isnt ready for snapshot listing yet, '
+                                         'upgrading it to v2 isnt possible at '
+                                         'the moment')
             raise
 
-        # v1 subvolumes with snapshots cannot be upgraded to v2
-        if v1_subvolume.list_snapshots():
-            return
+        if v1_subvol.list_snapshots():
+                raise SubvolUpgradeError(errno.ENOTSUP,
+                                         f'v1 subvol {base_subvol.name} '
+                                         'has snapshots, upgrading it to v2 '
+                                         'isnt possible at the moment')
 
-        subvolume.metadata_mgr.update_global_section(MetadataManager.GLOBAL_META_KEY_VERSION, SubvolumeV2.version())
-        subvolume.metadata_mgr.flush()
+        base_subvol.metadata_mgr.update_global_section(MetadataManager.GLOBAL_META_KEY_VERSION, SubvolumeV2.version())
+        base_subvol.metadata_mgr.flush()
+
+        return SubvolumeV2(base_subvol.mgr, base_subvol.fs,
+                           base_subvol.vol_spec, base_subvol.group,
+                           base_subvol.name,
+                           legacy=base_subvol.legacy_mode)
 
     def upgrade_legacy_subvolume(self, fs, subvolume):
         assert subvolume.legacy_mode
@@ -106,32 +188,45 @@ class SubvolumeLoader(object):
         # legacy is only upgradable to v1
         subvolume.init_config(SubvolumeV1.version(), subvolume_type, qpath, initial_state)
 
-    def get_subvolume_object(self, mgr, fs, vol_spec, group, subvolname, upgrade=True):
-        subvolume = SubvolumeBase(mgr, fs, vol_spec, group, subvolname)
+    def upgrade_subvol(self, base_subvol, sv_version):
+        assert not base_subvol.legacy_mode
+
+        assert sv_version != 3
+
+        if sv_version == 2:
+            subvol = self.upgrade_subvol_to_v3(base_subvol, sv_version)
+        elif sv_version == 1:
+            subvol = self.upgrade_to_v2_subvolume(base_subvol, sv_version)
+        elif sv_version == 0:
+            # TODO: move logic for legacy subvolume here eventually
+            assert False
+        else:
+            assert False
+
+        return subvol
+
+    def get_subvolume_object(self, mgr, fs, vol_spec, group, subvolname,
+                             upgrade=True):
+        base_subvol = SubvolumeBase(mgr, fs, vol_spec, group, subvolname)
+
         try:
-            subvolume.discover()
-            self.upgrade_to_v2_subvolume(subvolume)
-
-            version = int(subvolume.metadata_mgr.get_global_option('version'))
-            subvol_class = self._get_subvolume_version(version)
-            if version <= 2:
-                subvol_obj = subvol_class(mgr, fs, vol_spec, group, subvolname,
-                                          legacy=subvolume.legacy_mode)
-            elif version == 3:
-                subvol_data_path = subvolume.metadata_mgr.get_global_option('path')
-                uuid = basename(dirname(subvol_data_path))
-                subvol_obj = subvol_class(mgr, fs, vol_spec, group, subvolname,
-                                          legacy=subvolume.legacy_mode,
-                                          uuid=uuid)
+            sv_version = base_subvol.discover()
+            log.info(f'version of discovered subvol is {sv_version}')
+            if sv_version == 3:
+                sv_path = base_subvol.metadata_mgr.get_global_option('path')
+                sv_uuid = basename(dirname(sv_path))
+                subvol = SubvolumeV3(base_subvol.mgr, base_subvol.fs,
+                                     base_subvol.vol_spec, base_subvol.group,
+                                     base_subvol.name, uuid=sv_uuid)
             else:
-                raise RuntimeError('recevied unexpected subvol version')
+                subvol = self.upgrade_subvol(base_subvol, sv_version)
 
-            subvol_obj.metadata_mgr.refresh()
-            subvol_obj.clean_stale_snapshot_metadata()
-            return subvol_obj
+            subvol.metadata_mgr.refresh()
+            subvol.clean_stale_snapshot_metadata()
+            return subvol
         except MetadataMgrException as me:
             if me.errno == -errno.ENOENT and upgrade:
-                self.upgrade_legacy_subvolume(fs, subvolume)
+                self.upgrade_legacy_subvolume(fs, base_subvol)
                 return self.get_subvolume_object(mgr, fs, vol_spec, group, subvolname, upgrade=False)
             else:
                 # log the actual error and generalize error string returned to user
