@@ -13,7 +13,7 @@ from .subvolume_v3 import SubvolumeV3
 from .metadata_manager import MetadataManager
 from .op_sm import SubvolumeOpSm
 from ..template import SubvolumeOpType
-from ...fs_util import statx_path
+from ...fs_util import statx_path, get_all_xattrs, set_all_xattrs
 from ...exception import (MetadataMgrException, OpSmException, VolumeException,
                           SubvolUpgradeError)
 
@@ -67,6 +67,7 @@ class SubvolumeLoader(object):
         return asu
 
     def upgrade_subvol_from_v2_to_v3(self, base_subvol, sv_version):
+        fs = base_subvol.fs
         v2_sv_uuid_path = base_subvol.metadata_mgr.get_global_option('path')
         sv_path = dirname(v2_sv_uuid_path)
         sv_uuid = basename(v2_sv_uuid_path)
@@ -74,23 +75,31 @@ class SubvolumeLoader(object):
         log.info(f'upgrading subvol {base_subvol.name} from v2 to v3, '
                  'upgrading its layout...')
         try:
-            uid, gid, mode = statx_path(base_subvol.fs, v2_sv_uuid_path,
+            uid, gid, mode = statx_path(fs, v2_sv_uuid_path,
                                         ('uid', 'gid', 'mode'))
+
+            sv_xattrs = get_all_xattrs(fs, v2_sv_uuid_path)
+            log.info(f'mark123 sv_xattrs = {sv_xattrs}')
+            log.info(f'mark123 v2_sv_uuid_path = {v2_sv_uuid_path}')
+
 
             v3_sv_mnt_path = f'{sv_path}/roots/{sv_uuid}/mnt'
             v3_sv_uuid_path = f'{sv_path}/roots/{sv_uuid}'
             sv_meta_path = f'{sv_path}/.meta'
             sv_incar_meta_path = f'{sv_path}/.meta.{sv_uuid}'
 
-            base_subvol.fs.mkdirs(v3_sv_uuid_path, 0o755)
-            base_subvol.fs.rename(v2_sv_uuid_path, v3_sv_mnt_path)
-            base_subvol.fs.chown(v3_sv_mnt_path, uid, gid)
-            base_subvol.fs.chmod(v3_sv_mnt_path, mode)
+            fs.mkdirs(v3_sv_uuid_path, 0o755)
+            fs.rename(v2_sv_uuid_path, v3_sv_mnt_path)
+            fs.chown(v3_sv_mnt_path, uid, gid)
+            fs.chmod(v3_sv_mnt_path, mode)
 
-            base_subvol.fs.rename(sv_meta_path, sv_incar_meta_path)
-            base_subvol.fs.symlink(f'.meta.{sv_uuid}', sv_meta_path)
-            base_subvol.fs.chown(sv_incar_meta_path, 0, 0)
-            base_subvol.fs.chmod(sv_incar_meta_path, 644)
+            if sv_xattrs:
+                set_all_xattrs(fs, v3_sv_mnt_path, sv_xattrs)
+
+            fs.rename(sv_meta_path, sv_incar_meta_path)
+            fs.symlink(f'.meta.{sv_uuid}', sv_meta_path)
+            fs.chown(sv_incar_meta_path, 0, 0)
+            fs.chmod(sv_incar_meta_path, 644)
         except cephfs.Error as e:
             raise SubvolUpgradeError(-e.args[0],
                                      f'error upgrading subvol {base_subvol.name} '

@@ -1347,6 +1347,9 @@ def exec_test():
     opt_exit_on_test_failure = True
     mode = Mode.unittest
 
+    log.info('\n'*10)
+    log.info(f'python version = sys.version = {sys.version}')
+    log.info(f'args passed = sys.argv = {sys.argv}')
     args = sys.argv[1:]
     flags = [a for a in args if a.startswith("-")]
     modules = [a for a in args if not a.startswith("-")]
@@ -1610,8 +1613,12 @@ def exec_test():
         for test, failure in result.failures:
             bad_tests.append(str(test))
 
+        log.info('vstart_runner.py finished running, exiting with 1')
+        log.info('\n'*10)
         sys.exit(-1)
     else:
+        log.info('vstart_runner.py finished running, exiting with 0')
+        log.info('\n'*10)
         sys.exit(0)
 
 def run_configs(configs):

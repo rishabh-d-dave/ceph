@@ -777,7 +777,7 @@ class FilesystemBase(MDSClusterBase):
         confirm: bool and fs_ops: list[str]
         """
         if self.name is None:
-            self.name = "cephfs"
+            self.name = "fs1"
         if self.metadata_pool_name is None:
             self.metadata_pool_name = "{0}_metadata".format(self.name)
         if self.data_pool_name is None:

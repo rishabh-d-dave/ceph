@@ -9,7 +9,7 @@ class VolumeException(Exception):
         self.errno = error_code
         self.error_str = error_message
 
-        log.info(f'{self.__class__.__name__}: {str(self)}')
+        log.info(f'ERROR: {self.__class__.__name__}: {str(self)}')
 
     def to_tuple(self):
         return self.errno, "", self.error_str

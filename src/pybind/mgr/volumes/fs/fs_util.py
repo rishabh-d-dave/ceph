@@ -236,3 +236,34 @@ def statx_path(fs, path, fields):
     # sxb = statx buffer
     sxb = fs.statx(path, mask, cephfs.AT_STATX_SYNC_AS_STAT)
     return (int(sxb['uid']), int(sxb['gid']), int(sxb['mode']))
+
+
+def get_all_xattrs(fs, path):
+    '''
+    :return: dict of xattr key and values
+    '''
+    num_of_keys, keys = fs.listxattr(path)
+    if not keys: 
+        return
+    keys = keys.split('\x00')
+    assert len(keys) == num_of_keys
+
+    sv_xattrs = {}
+    for xattr in keys:
+        if not xattr:
+            continue
+        val = fs.getxattr(path, xattr)
+        if val:
+            sv_xattrs[xattr] = val
+
+    return sv_xattrs
+
+
+def set_all_xattrs(fs, path, path_xattrs):
+    '''
+    :param xattrs: dict of xattr key and values
+    '''
+    for xattr, val in path_xattrs.items():
+        if not val:
+            continue
+        fs.setxattr(path, xattr, val)

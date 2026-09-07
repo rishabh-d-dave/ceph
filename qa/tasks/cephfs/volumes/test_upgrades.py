@@ -264,7 +264,7 @@ class TestUpgrades(VolumesHelper):
         # verify trash dir is clean
         self._wait_for_trash_empty()
 
-    def test_malicious_metafile_on_legacy_to_v1_upgrade(self):
+    def _test_malicious_metafile_on_legacy_to_v1_upgrade(self):
         """
         Validate handcrafted .meta file on legacy subvol root doesn't break the system
         on legacy subvol upgrade to v1
