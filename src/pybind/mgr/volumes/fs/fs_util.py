@@ -219,12 +219,10 @@ def create_base_dir(fs, path, mode):
             raise VolumeException(-e.args[0], e.args[1])
 
 
-def statx_path(fs, path, fields):
+def statx_path(fs, path, fields=None):
     '''
     Convenient wrapper around libcephfs's statx().
     '''
-    assert fields != ()
-
     mask = 0
     if 'uid' in fields:
         mask = cephfs.CEPH_STATX_UID

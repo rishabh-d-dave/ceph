@@ -56,13 +56,16 @@ class SubvolumeV3(SubvolumeV2):
 
     VERSION = 3
 
-    def __init__(self, mgr, fs, vol_spec, group, subvolname, legacy=False,
-                 uuid=None):
+    def __init__(self, mgr, fs, vol_spec, group, name, uuid=None,
+                 legacy=False):
+        self.name = name
+        # for compatibility with previous versions
+        self.subvolname = self.name
         # XXX: this needs to be defined beforehand since __init__() below calls
         # __init__() from previous versions and previous versions needs
         # self.base_path to be defined. self.subvol_dir in v3 is same
         # self.base_path in older versions.
-        self.subvol_dir = f'/volumes/{group.groupname}/{subvolname}'
+        self.subvol_dir = f'/volumes/{group.name}/{name}'
 
         # XXX: both of these needs to be defined beforehand because __init__()
         # below will initialize metadata manager too which results in
@@ -80,7 +83,7 @@ class SubvolumeV3(SubvolumeV2):
         self.meta = self.meta.encode('utf-8')
         self.subvol_dir = self.subvol_dir.encode('utf-8')
 
-        super(SubvolumeV3, self).__init__(mgr, fs, vol_spec, group, subvolname)
+        super(SubvolumeV3, self).__init__(mgr, fs, vol_spec, group, name)
 
         # decoding it so that rest of the paths can be built using this path.
         # It must be encoded again before this method ends since rest of the
@@ -112,6 +115,9 @@ class SubvolumeV3(SubvolumeV2):
 
         self.snap_dir = self.snap_dir.encode('utf-8')
         self.fscrypt_dir = self.fscrypt_dir.encode('utf-8')
+
+        self.md = self.metadata_mgr
+        self.auth_md = self.auth_metadata_mgr
 
     @staticmethod
     def version():
@@ -172,8 +178,7 @@ class SubvolumeV3(SubvolumeV2):
         if auth:
             # Create the subvolume metadata file which manages auth-ids if it
             # doesn't exist
-            self.auth_mdata_mgr.create_subvolume_metadata_file(
-                self.group.groupname, self.subvolname)
+            self.auth_md.create_subvolume_metadata_file(self.group.name, self.name)
 
 
     # following are methods that help or do subvol deletion
@@ -275,7 +280,7 @@ class SubvolumeV3(SubvolumeV2):
             self.trash_incarnation_dir()
 
             # Delete the volume meta file, if it's not already deleted
-            self.auth_mdata_mgr.delete_subvolume_metadata_file(self.group.groupname, self.subvolname)
+            self.auth_md.delete_subvolume_metadata_file(self.group.name, self.name)
         except MetadataMgrException as e:
             log.error(f"failed to write config: {e}")
             raise VolumeException(e.args[0], e.args[1])
@@ -285,14 +290,14 @@ class SubvolumeV3(SubvolumeV2):
         self.fs.rename(self.mnt_dir, self.unlinked_dir)
 
     def update_meta_file_after_retain(self):
-        self.metadata_mgr.remove_section(MetadataManager.USER_METADATA_SECTION)
-        self.metadata_mgr.update_section(MetadataManager.GLOBAL_SECTION,
+        self.md.remove_section(MetadataManager.USER_METADATA_SECTION)
+        self.md.update_section(MetadataManager.GLOBAL_SECTION,
                                          MetadataManager.GLOBAL_META_KEY_PATH,
                                          self.unlinked_dir.decode('utf-8'))
-        self.metadata_mgr.update_global_section(
+        self.md.update_global_section(
             MetadataManager.GLOBAL_META_KEY_STATE,
             SubvolumeStates.STATE_RETAINED.value)
-        self.metadata_mgr.flush()
+        self.md.flush()
 
 
     # Following methods help clone operation -

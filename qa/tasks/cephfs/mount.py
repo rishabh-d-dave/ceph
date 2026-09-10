@@ -897,6 +897,17 @@ class CephFSMountBase(object):
         p.wait()
         return p.stdout.getvalue().strip()
 
+    def run_libcephfs_code(self, code):
+        code = dedent(f"""\
+        import cephfs as libcephfs
+        global cephfs
+        cephfs = cephfs.LibCephFS(conffile='')
+        {code}
+        cephfs.shutdown()
+        """)
+
+        self.run_python(code)
+
     def run_shell(self, args, **kwargs):
         kwargs.setdefault('cwd', self.mountpoint)
         kwargs.setdefault('omit_sudo', False)

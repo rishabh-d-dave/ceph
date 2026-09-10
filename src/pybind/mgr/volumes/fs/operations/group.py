@@ -30,6 +30,7 @@ class Group(GroupTemplate):
         self.group_id = None
         self.vol_spec = vol_spec
         self.groupname = groupname if groupname else Group.NO_GROUP_NAME
+        # more intuitive to remember
         self.name = self.groupname
 
     @property
