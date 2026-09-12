@@ -70,7 +70,7 @@ class SubvolumeLoader(object):
         log.info(f'upgrading subvol {base_subvol.name} from v2 to v3, '
                  'upgrading its layout...')
 
-        fs = base_subvol
+        fs = base_subvol.fs
         v2_sv_uuid_path = base_subvol.metadata_mgr.get_global_option('path')
         sv_path = dirname(v2_sv_uuid_path)
         sv_uuid = basename(v2_sv_uuid_path)
@@ -94,7 +94,7 @@ class SubvolumeLoader(object):
 
             fs.mkdirs(v3_subvol_uuid_path, 0o755)
             if has_v2_snaps:
-                fs.mkdir(v2_sv_uuid_path, v3_subvol_mnt_path)
+                fs.mkdir(v3_subvol_mnt_path, 0o755)
             else:
                 fs.rename(v2_sv_uuid_path, v3_subvol_mnt_path)
 
@@ -119,9 +119,9 @@ class SubvolumeLoader(object):
         v3_subvol = SubvolumeV3(mgr=base_subvol.mgr, fs=base_subvol.fs,
                             vol_spec=base_subvol.vol_spec, group=base_subvol.group,
                             name=base_subvol.name, uuid=sv_uuid)
-        return v3_subvol
+        return v3_subvol, has_v2_snaps
 
-    def upgrade_sv_md_to_v3(self, v3_subvol):
+    def upgrade_sv_md_to_v3(self, v3_subvol, has_v2_snaps):
         v3_subvol.md.refresh()
 
         log.info(f'upgrade for subvol {v3_subvol.name} from v2 to v3 is complete')
@@ -130,7 +130,7 @@ class SubvolumeLoader(object):
             v3_subvol.md.update_global_section('version', v3_subvol.version())
             v3_subvol.md.update_global_section('path', v3_subvol.mnt_dir.decode('utf-8'))
 
-            if v3_subvol.has_v2_snaps:
+            if has_v2_snaps:
                 v3_subvol.md.update_global_section('has_v2_snaps', 'True')
 
             v3_subvol.metadata_mgr.flush()
@@ -140,8 +140,8 @@ class SubvolumeLoader(object):
                                   'subvol upgrade from v2 to v3')
 
     def upgrade_subvol_from_v2_to_v3(self, base_subvol, version):
-        v3_subvol = self.upgrade_to_v3_layout(base_subvol)
-        self.upgrade_sv_md_to_v3(v3_subvol)
+        v3_subvol, has_v2_snaps = self.upgrade_to_v3_layout(base_subvol)
+        self.upgrade_sv_md_to_v3(v3_subvol, has_v2_snaps)
         return v3_subvol
 
     def upgrade_subvol_to_v3(self, base_subvol, version):

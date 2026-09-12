@@ -6,6 +6,7 @@ from uuid import uuid4
 import cephfs
 
 from .metadata_manager import MetadataManager
+from .auth_metadata import AuthMetadataManager
 from .subvolume_attrs import SubvolumeStates
 from .subvolume_v2 import SubvolumeV2
 from ..trash import create_trashcan, open_trashcan
@@ -58,38 +59,31 @@ class SubvolumeV3(SubvolumeV2):
 
     def __init__(self, mgr, fs, vol_spec, group, name, uuid=None,
                  legacy=False):
+        self.mgr = mgr
+        self.fs = fs
+        self.vol_spec = vol_spec
+        self.group = group
         self.name = name
-        # for compatibility with previous versions
-        self.subvolname = self.name
-        # XXX: this needs to be defined beforehand since __init__() below calls
-        # __init__() from previous versions and previous versions needs
-        # self.base_path to be defined. self.subvol_dir in v3 is same
-        # self.base_path in older versions.
-        self.subvol_dir = f'/volumes/{group.name}/{name}'
+        self.uuid = uuid if uuid else uuid4()
 
-        # XXX: both of these needs to be defined beforehand because __init__()
-        # below will initialize metadata manager too which results in
-        # self.config_path() being called. and self.config_path() needs this
-        # variable (see the method's comment for the reason behind it).
-        if uuid:
-            self.uuid = uuid
-        else:
-            self.uuid = uuid4()
+        self.subvol_dir = (f'{self.vol_spec.DEFAULT_SUBVOL_PREFIX}/'
+                           f'{group.name}/{name}')
+        # presence of '/' at beginning of vol_spec.DEFAULT_SUBVOL_PREFIX is
+        # always confusing
+        assert self.subvol_dir[0] == '/'
+        assert self.subvol_dir[1] != '/'
 
-        self.meta = f'{self.subvol_dir}/.meta.{self.uuid}'
+        self.meta_file_name = f'.meta.{self.uuid}'
+        self.meta = f'{self.subvol_dir}/{self.meta_file_name}'.encode('utf-8')
+        log.debug(f'loading config/meta for subvol {self.name}. meta file '
+                  'name = {self.meta}' )
+        self.md = MetadataManager(self.fs, self.config_path, 0o640)
+        self.auth_md = AuthMetadataManager(self.fs)
 
-        # encode these variables since they'll be used in __init__() below and
-        # all its underlying calls.
-        self.meta = self.meta.encode('utf-8')
-        self.subvol_dir = self.subvol_dir.encode('utf-8')
+        self._define_paths()
+        self._encode_paths()
 
-        super(SubvolumeV3, self).__init__(mgr, fs, vol_spec, group, name)
-
-        # decoding it so that rest of the paths can be built using this path.
-        # It must be encoded again before this method ends since rest of the
-        # class needs it in encoded form.
-        self.subvol_dir = self.subvol_dir.decode('utf-8')
-
+    def _define_paths(self):
         # contains data dir for all incarnations
         self.roots_dir = f'{self.subvol_dir}/roots'
         # meta file for the current subvolume's incarnation
@@ -102,6 +96,7 @@ class SubvolumeV3(SubvolumeV2):
         self.snap_dir = f'{self.uuid_dir}/{self.vol_spec.snapshot_dir_prefix}'
         self.fscrypt_dir = f'{self.uuid_dir}/.fscrypt'
 
+    def _encode_paths(self):
         self.subvol_dir = self.subvol_dir.encode('utf-8')
         self.roots_dir = self.roots_dir.encode('utf-8')
         self.current_meta = self.current_meta.encode('utf-8')
@@ -116,16 +111,24 @@ class SubvolumeV3(SubvolumeV2):
         self.snap_dir = self.snap_dir.encode('utf-8')
         self.fscrypt_dir = self.fscrypt_dir.encode('utf-8')
 
-        self.md = self.metadata_mgr
-        self.auth_md = self.auth_metadata_mgr
-
     @staticmethod
     def version():
         return SubvolumeV3.VERSION
 
+    # only for compatibility with prev versions
     @property
-    def base_path(self):
-        return self.subvol_dir
+    def subvolname(self):
+        return self.name
+
+    # only for compatibility with prev versions
+    @property
+    def metadata_mgr(self):
+        return self.md
+
+    # only for compatibility with prev versions
+    @property
+    def auth_mdata_mgr(self):
+        return self.auth_md
 
     @property
     def config_path(self):
@@ -137,6 +140,10 @@ class SubvolumeV3(SubvolumeV2):
         accessed.
         '''
         return self.meta
+
+    @property
+    def base_path(self):
+        return self.subvol_dir
 
 
     # following methods either help or do subvolume creation and opening/discovery
@@ -237,9 +244,8 @@ class SubvolumeV3(SubvolumeV2):
 
     def get_incar_uuid_for_snap(self, snap_name):
         '''
-        Return incarnation's UUID in which the snapshot name is present.
-        When multiple incarnations for a subvolume exists, check if a snap
-        exists in one of the incarnations.
+        Return UUID of the incarnation in which the given snapshot name is
+        present.
         '''
         # list of all incarnations/UUID dirs of this subvolume.
         incars = listdir(self.fs, self.roots_dir)
@@ -272,6 +278,29 @@ class SubvolumeV3(SubvolumeV2):
         super(SubvolumeV3, self).remove_snapshot(snap_name, force=force,
                                                  snap_path=snap_path)
 
+    def get_v2_snap_names(self):
+        '''
+        :return: list of v2 snap names
+        :rtype: list of str
+        '''
+        v2_snap_dir_path = join(self.subvol_dir,
+                                self.vol_spec.snapshot_dir_prefix)
+        return listsnaps(self.fs, self.vol_spec, v2_snap_dir_path,
+                         filter_inherited_snaps=True)
+
+    def list_snapshots(self):
+        '''
+        :return: list of snap names
+        :rtype: list of str
+        '''
+        snap_names = self.list_v3_snaps()
+
+        if self.md.get_global_option('has_v2_snaps'):
+            v2_snap_names = self.get_v2_snap_names()
+            snap_names.extend(v2_snap_names)
+
+        return snap_names
+
     def remove_but_retain_snaps(self):
         assert self.state != SubvolumeStates.STATE_RETAINED
 
@@ -284,6 +313,7 @@ class SubvolumeV3(SubvolumeV2):
         except MetadataMgrException as e:
             log.error(f"failed to write config: {e}")
             raise VolumeException(e.args[0], e.args[1])
+
     # in subvol v3, self.mnt_dir (AKA data dir) is renamed to ".unlinked" if
     # subvol is deleted but snapshots are retained.
     def trash_incarnation_dir(self):
@@ -338,7 +368,7 @@ class SubvolumeV3(SubvolumeV2):
     def purgeable(self):
         return False if not self.retained or self.list_snapshots() else True
 
-    def list_snapshots(self):
+    def list_v3_snaps(self):
         '''
         Return list of name of all snapshots from all the incarnations.
         '''

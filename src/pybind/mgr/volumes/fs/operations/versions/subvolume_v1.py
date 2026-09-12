@@ -848,8 +848,11 @@ class SubvolumeV1(SubvolumeBase, SubvolumeTemplate):
 
     def list_snapshots(self):
         try:
-            dirpath = self.snapshot_base_path()
-            return listsnaps(self.fs, self.vol_spec, dirpath, filter_inherited_snaps=True)
+            if snap_dir_path is None:
+                snap_dir_path = self.snapshot_base_path()
+
+            return listsnaps(self.fs, self.vol_spec, snap_dir_path,
+                             filter_inherited_snaps=True)
         except VolumeException as ve:
             if ve.errno == -errno.ENOENT:
                 return []

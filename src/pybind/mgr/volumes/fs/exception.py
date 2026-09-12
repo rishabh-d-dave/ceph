@@ -1,3 +1,4 @@
+import errno as module_errno
 from logging import getLogger
 
 
@@ -5,45 +6,46 @@ log = getLogger(__name__)
 
 
 class VolumeException(Exception):
-    def __init__(self, error_code, error_message):
-        self.errno = error_code
-        self.error_str = error_message
-
-        log.info(f'ERROR: {self.__class__.__name__}: {str(self)}')
+    def __init__(self, errno, errmsg):
+        self.errno = errno
+        self.errname = module_errno.errorcode[self.errno]
+        self.errmsg = errmsg
+        log.info(f'{self}')
 
     def to_tuple(self):
-        return self.errno, "", self.error_str
+        return self.errno, "", self.errmsg
 
     def __str__(self):
-        return "{0} ({1})".format(self.errno, self.error_str)
+        return (f'ERROR: {self.__class__.__name__}: errno={self.errno}, '
+                f'errname={self.errname} errmsg="{self.errmsg}"')
 
-class MetadataMgrException(Exception):
-    def __init__(self, error_code, error_message):
-        self.errno = error_code
-        self.error_str = error_message
-        log.info(f'{self.__class__.__name__}: {str(self)}')
 
-    def __str__(self):
-        return "{0} ({1})".format(self.errno, self.error_str)
+class MetadataMgrException(VolumeException):
+    def __init__(self, errno, errmsg):
+        super(MetadataMgrException, self).__init__(errno, errmsg)
 
-class IndexException(Exception):
-    def __init__(self, error_code, error_message):
-        self.errno = error_code
-        self.error_str = error_message
 
-    def __str__(self):
-        return "{0} ({1})".format(self.errno, self.error_str)
+class IndexException(VolumeException):
+    def __init__(self, errno, errmsg):
+        super(IndexException, self).__init__(errno, errmsg)
 
-class OpSmException(Exception):
-    def __init__(self, error_code, error_message):
-        self.errno = error_code
-        self.error_str = error_message
 
-    def __str__(self):
-        return "{0} ({1})".format(self.errno, self.error_str)
+class OpSmException(VolumeException):
+    def __init__(self, errno, errmsg):
+        super(OpSmException, self).__init__(errno, errmsg)
+
+
+class SubvolUpgradeError(VolumeException):
+    '''
+    Raised when subvolume can't be auto-upgraded.
+    '''
+
+    def __init__(self, errno, errmsg):
+        super(SubvolUpgradeError, self).__init__(errno, errmsg)
 
 class NotImplementedException(Exception):
     pass
+
 
 class ClusterTimeout(Exception):
     """
@@ -65,23 +67,8 @@ class ClusterError(Exception):
         self._result_str = result_str
 
     def __str__(self):
-        return "Error {0} (\"{1}\") while {2}".format(
-            self._result_code, self._result_str, self._action)
+        return (f'Error: {self.__class__.__name__} {self._result_code} '
+                f'"{self._result_str}" while {self._action}')
 
 class EvictionError(Exception):
     pass
-
-
-class SubvolUpgradeError(Exception):
-    '''
-    Raised when subvolume can't be auto-upgraded.
-    '''
-
-    def __init__(self, errno, errmsg):
-        self.errno = errno
-        self.errmsg = errmsg
-        log.info(str(self))
-
-    def __str__(self):
-        return (f'{self.__class__.__name__}: errno = {self.errno}, '
-                f'errmsg = {self.errmsg}')

@@ -127,6 +127,8 @@ def is_inherited_snap(snapname):
 def listsnaps(fs, volspec, snapdirpath, filter_inherited_snaps=False):
     """
     Get the snap names from a given snap directory path
+
+    :returns: list of snap names
     """
     if os.path.basename(snapdirpath) != volspec.snapshot_prefix.encode('utf-8'):
         raise VolumeException(-errno.EINVAL, "Not a snap directory: {0}".format(snapdirpath))
@@ -219,9 +221,13 @@ def create_base_dir(fs, path, mode):
             raise VolumeException(-e.args[0], e.args[1])
 
 
-def statx_path(fs, path, fields=None):
+def statx_path(fs, path, fields={}):
     '''
-    Convenient wrapper around libcephfs's statx().
+    Convenient wrapper around libcephfs's statx()
+
+    :param path: path to be statx'ed
+    :para fields: stat buffer fields to be fetched
+    :returns: bool or list. list if fields were passed, otherwise bool
     '''
     mask = 0
     if 'uid' in fields:
@@ -233,12 +239,27 @@ def statx_path(fs, path, fields=None):
 
     # sxb = statx buffer
     sxb = fs.statx(path, mask, cephfs.AT_STATX_SYNC_AS_STAT)
-    return (int(sxb['uid']), int(sxb['gid']), int(sxb['mode']))
+
+    if mask == 0:
+        # no fields were fetched, only existence was checked
+        return True
+
+    rv = []
+    if 'uid' in fields:
+        rv.append(int(sxb['uid']))
+    if 'gid' in fields:
+        rv.append(int(sxb['gid']))
+    if 'mode' in fields:
+        rv.append(int(sxb['mode']))
+
+    return rv
 
 
 def get_all_xattrs(fs, path):
     '''
-    :return: dict of xattr key and values
+    Get/return all xattrs present on the given path.
+
+    :returns: dict of xattr key and values
     '''
     num_of_keys, keys = fs.listxattr(path)
     if not keys: 
@@ -259,6 +280,8 @@ def get_all_xattrs(fs, path):
 
 def set_all_xattrs(fs, path, path_xattrs):
     '''
+    Set all passed xattrs on the given path
+
     :param xattrs: dict of xattr key and values
     '''
     for xattr, val in path_xattrs.items():
