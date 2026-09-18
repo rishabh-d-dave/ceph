@@ -1,10 +1,12 @@
-import os
 import stat
 
 import errno
 import logging
 import hashlib
+from os import strerror
+from os.path import join, split, basename, dirname
 from typing import Dict, Union
+from uuid import UUID
 
 import cephfs
 
@@ -66,16 +68,16 @@ class SubvolumeBase(object):
 
     @property
     def base_path(self):
-        return os.path.join(self.group.path, self.subvolname.encode('utf-8'))
+        return join(self.group.path, self.subvolname.encode('utf-8'))
 
     @property
     def config_path(self):
-        return os.path.join(self.base_path, b".meta")
+        return join(self.base_path, b".meta")
 
     @property
     def legacy_dir(self):
-        return (os.path.join(self.vol_spec.base_dir.encode('utf-8'),
-                SubvolumeBase.LEGACY_CONF_DIR.encode('utf-8')))
+        return join(self.vol_spec.base_dir.encode('utf-8'),
+                    SubvolumeBase.LEGACY_CONF_DIR.encode('utf-8'))
 
     @property
     def legacy_config_path(self):
@@ -89,7 +91,7 @@ class SubvolumeBase(object):
                                       "require python's hashlib library to support usedforsecurity flag in FIPS enabled systems")
 
         meta_config = "{0}.meta".format(m.hexdigest())
-        return os.path.join(self.legacy_dir, meta_config.encode('utf-8'))
+        return join(self.legacy_dir, meta_config.encode('utf-8'))
 
     @property
     def namespace(self):
@@ -284,7 +286,7 @@ class SubvolumeBase(object):
             try:
                 self.fs.getxattr(path, 'ceph.dir.layout.pool').decode('utf-8')
             except cephfs.NoData:
-                xattr_val = get_ancestor_xattr(self.fs, os.path.split(path)[0],
+                xattr_val = get_ancestor_xattr(self.fs, split(path)[0],
                                                "ceph.dir.layout.pool")
         if xattr_key and xattr_val:
             try:
@@ -666,7 +668,7 @@ class SubvolumeBase(object):
             self.metadata_mgr.flush()
         except MetadataMgrException as me:
             log.error(f"Failed to set user metadata key={keyname} value={value} on subvolume={self.subvol_name} "
-                      f"group={self.group_name} reason={me.args[1]}, errno:{-me.args[0]}, {os.strerror(-me.args[0])}")
+                      f"group={self.group_name} reason={me.args[1]}, errno:{-me.args[0]}, {strerror(-me.args[0])}")
             raise VolumeException(-me.args[0], me.args[1])
 
     def get_user_metadata(self, keyname):
@@ -691,7 +693,7 @@ class SubvolumeBase(object):
             if me.errno == -errno.ENOENT:
                 raise VolumeException(-errno.ENOENT, "subvolume metadata does not exist")
             log.error(f"Failed to remove user metadata key={keyname} on subvolume={self.subvol_name} "
-                      f"group={self.group_name} reason={me.args[1]}, errno:{-me.args[0]}, {os.strerror(-me.args[0])}")
+                      f"group={self.group_name} reason={me.args[1]}, errno:{-me.args[0]}, {strerror(-me.args[0])}")
             raise VolumeException(-me.args[0], me.args[1])
 
     def get_snap_section_name(self, snapname):
@@ -707,7 +709,7 @@ class SubvolumeBase(object):
         except MetadataMgrException as me:
             log.error(f"Failed to set snapshot metadata key={keyname} value={value} on snap={snapname} "
                       f"subvolume={self.subvol_name} group={self.group_name} "
-                      f"reason={me.args[1]}, errno:{-me.args[0]}, {os.strerror(-me.args[0])}")
+                      f"reason={me.args[1]}, errno:{-me.args[0]}, {strerror(-me.args[0])}")
             raise VolumeException(-me.args[0], me.args[1])
 
     def get_snapshot_metadata(self, snapname, keyname):
@@ -718,7 +720,7 @@ class SubvolumeBase(object):
                 raise VolumeException(-errno.ENOENT, "key '{0}' does not exist.".format(keyname))
             log.error(f"Failed to get snapshot metadata key={keyname} on snap={snapname} "
                       f"subvolume={self.subvol_name} group={self.group_name} "
-                      f"reason={me.args[1]}, errno:{-me.args[0]}, {os.strerror(-me.args[0])}")
+                      f"reason={me.args[1]}, errno:{-me.args[0]}, {strerror(-me.args[0])}")
             raise VolumeException(-me.args[0], me.args[1])
         return value
 
@@ -736,14 +738,14 @@ class SubvolumeBase(object):
                 raise VolumeException(-errno.ENOENT, "snapshot metadata not does not exist")
             log.error(f"Failed to remove snapshot metadata key={keyname} on snap={snapname} "
                       f"subvolume={self.subvol_name} group={self.group_name} "
-                      f"reason={me.args[1]}, errno:{-me.args[0]}, {os.strerror(-me.args[0])}")
+                      f"reason={me.args[1]}, errno:{-me.args[0]}, {strerror(-me.args[0])}")
             raise VolumeException(-me.args[0], me.args[1])
 
     def snapshot_visibility_set(self, value):
         if value not in ("true", "false"):
             raise VolumeException(-errno.EINVAL, "snapshot visibility value invalid")
 
-        subvol_root_path = os.path.dirname(self.path)
+        subvol_root_path = dirname(self.path)
         subvol_v2_path = self.path
         snaps_visibility_vxattr = "ceph.dir.subvolume.snaps.visible"
         subvolume_size = 0
@@ -791,7 +793,7 @@ class SubvolumeBase(object):
             raise VolumeException(-e.args[0], e.args[1])
 
     def snapshot_visibility_get(self):
-        subvol_parent_path = os.path.dirname(self.path)
+        subvol_parent_path = dirname(self.path)
         try:
             return self.fs.getxattr(subvol_parent_path,
                                     "ceph.dir.subvolume.snaps.visible").decode('utf-8')
