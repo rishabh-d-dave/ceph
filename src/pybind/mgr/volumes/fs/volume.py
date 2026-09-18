@@ -113,6 +113,10 @@ class VolumeClient(CephfsClient["Module"]):
                     return self.volume_exception_to_retval(ve)
             return wrapper
         elif ve is not None:
+            log.info(ve)
+            # log traceback too since error is being reported to the user.
+            log.info(ve.traceback)
+
             # used as a method on self with a VolumeException argument
             return ve.to_tuple()
         else:
