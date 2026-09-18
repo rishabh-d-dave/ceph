@@ -471,6 +471,14 @@ class SubvolumeBase(object):
         self.metadata_mgr.flush()
 
     def discover(self):
+        '''
+        Figure out subvolume version and return version number.
+
+        v1 -> 1
+        v2 -> 2
+        v3 -> 3
+        legacy -> 0
+        '''
         log.debug("discovering subvolume "
                   "'{0}' [mode: {1}]".format(self.subvolname, "legacy"
                                              if self.legacy_mode else "new"))
@@ -478,17 +486,41 @@ class SubvolumeBase(object):
             self.fs.stat(self.base_path)
             self.metadata_mgr.refresh()
             log.debug("loaded subvolume '{0}'".format(self.subvolname))
-            subvol_data_path = self.metadata_mgr.get_global_option(MetadataManager.GLOBAL_META_KEY_PATH)
-            subvol_path_v2 = os.path.dirname(subvol_data_path)
-            subvol_path_v3 = os.path.dirname(os.path.dirname(os.path.dirname(subvol_data_path)))
+
+            sv_data_path = self.metadata_mgr.get_global_option('path')
+            # trailing slash messes up basename/dirname results
+            if sv_data_path[-1] == '/':
+                sv_data_path = sv_data_path[:-1]
+            log.info(f'sv_data_path = {sv_data_path}')
+            if basename(sv_data_path) == 'mnt':     # implies v3
+                sv_uuid = basename(dirname(sv_data_path))
+                sv_path = dirname(dirname(dirname(sv_data_path)))
+            else:   # TODO: it could also be legacy
+                sv_uuid = basename(sv_data_path)
+                sv_path = dirname(sv_data_path)
+            log.info(f'sv_path = {sv_path}')
+
+            try:
+                UUID(sv_uuid, version=4)
+            except ValueError:
+                raise AssertionError('found false UUID')
+
             base_path = self.base_path.decode('utf-8')
+            # TODO: after v3 upgrades are done, this "fabricated stuff" needs
+            # to removed...
             # subvolume with retained snapshots has empty path, don't mistake it for
             # fabricated metadata.
             if (not self.legacy_mode and
                 self.state != SubvolumeStates.STATE_RETAINED and
-                base_path != subvol_path_v2 and
-                base_path != subvol_path_v3):
+                base_path != sv_path):
                 raise MetadataMgrException(-errno.ENOENT, 'fabricated .meta')
+
+            sv_version = int(self.metadata_mgr.get_global_option('version'))
+            # TODO update eventually to use subvol classes for subvol version
+            # instead of literals
+            assert sv_version in (0, 1, 2, 3), \
+                    f'invalid version number: version {sv_version} doesnt exist'
+            return sv_version
         except MetadataMgrException as me:
             if me.errno in (-errno.ENOENT, -errno.EINVAL) and not self.legacy_mode:
                 log.warn("subvolume '{0}', {1}, "
@@ -496,6 +528,7 @@ class SubvolumeBase(object):
                 self.legacy_mode = True
                 self.load_config()
                 self.discover()
+                return 0
             else:
                 raise
         except cephfs.Error as e:

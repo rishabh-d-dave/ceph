@@ -1,166 +1,286 @@
-import errno
-from os.path import basename, join
+from errno import *
+from os.path import basename
 from logging import getLogger
 from uuid import uuid4
+from functools import wraps
 
 import cephfs
 
 from .metadata_manager import MetadataManager
+from .auth_metadata import AuthMetadataManager
 from .subvolume_attrs import SubvolumeStates
 from .subvolume_v2 import SubvolumeV2
 from ..trash import create_trashcan, open_trashcan
-from ...fs_util import listdir, create_base_dir, listsnaps
+from ...utils import ensure_uuid_is_valid, safe_join, to_bytes
+from ...fs_util import (listdir, create_base_dir, listsnaps, path_exists,
+                        is_dir_empty)
 from ...exception import VolumeException, MetadataMgrException
 
 
 log = getLogger(__name__)
 
 
-# TODO: revise this comment to reflect latest updates once layout is approved
-# on the PR.
-class SubvolumeV3(SubvolumeV2):
+class PreV3Helper:
     '''
-    1. Following is layout of subvol v3 directories.
-
-        /volumes/<group>/<subvol>/roots/<uuid1>/mnt
-                                                ^ mount dir
-                                        ^ data dir/uuid dir
-                                    ^ roots dir
-                            ^ subvol dir
-
-    2. Following is the path of meta file -
-
-    /volumes/<group>/<subvol>/.meta.<uuid3>
-
-    3. UUID dir of current incarnation can be found through the symlink -
-
-    /volumes/<group>/<subvol>/roots/{.meta -> .meta.<uuid3>}
-
-    NOTE: Absence of ".meta" implies that subvolume has been deleted, taking
-    snapshots will not be possible then.
-
-    4. Subvolume metadata (.fscrypt and .snap for example) lives in UUID dir -
-
-    /volumes/<group>/<subvol>/roots/<uuid1>/.fscrypt
-    /volumes/<group>/<subvol>/roots/<uuid1>/.snap
-
-    5. This is how a subvol will look with previous incarnations -
-
-    /volumes/<group>/<subvol>/roots/<uuid1>
-    /volumes/<group>/<subvol>/roots/<uuid2>
-    /volumes/<group>/<subvol>/roots/<uuid3>
-    /volumes/<group>/<subvol>/roots/.meta.<uuid1>
-    /volumes/<group>/<subvol>/roots/.meta.<uuid2>
-    /volumes/<group>/<subvol>/roots/.meta.<uuid3>
+    Attritbutes/methods that makes SubvolumeV3 code compatible with SubvolumeV2,
+    SubvolumeV1 and SubvolumeBase.
     '''
-
-    VERSION = 3
-
-    def __init__(self, mgr, fs, vol_spec, group, subvolname, legacy=False,
-                 uuid=None):
-        # XXX: this needs to be defined beforehand since __init__() below calls
-        # __init__() from previous versions and previous versions needs
-        # self.base_path to be defined. self.subvol_dir in v3 is same
-        # self.base_path in older versions.
-        self.subvol_dir = f'/volumes/{group.groupname}/{subvolname}'
-
-        # XXX: both of these needs to be defined beforehand because __init__()
-        # below will initialize metadata manager too which results in
-        # self.config_path() being called. and self.config_path() needs this
-        # variable (see the method's comment for the reason behind it).
-        if uuid:
-            self.uuid = uuid
-        else:
-            self.uuid = uuid4()
-
-        self.meta = f'{self.subvol_dir}/.meta.{self.uuid}'
-
-        # encode these variables since they'll be used in __init__() below and
-        # all its underlying calls.
-        self.meta = self.meta.encode('utf-8')
-        self.subvol_dir = self.subvol_dir.encode('utf-8')
-
-        super(SubvolumeV3, self).__init__(mgr, fs, vol_spec, group, subvolname)
-
-        # decoding it so that rest of the paths can be built using this path.
-        # It must be encoded again before this method ends since rest of the
-        # class needs it in encoded form.
-        self.subvol_dir = self.subvol_dir.decode('utf-8')
-
-        # contains data dir for all incarnations
-        self.roots_dir = f'{self.subvol_dir}/roots'
-        # meta file for the current subvolume's incarnation
-        self.current_meta = f'{self.subvol_dir}/.meta'
-
-        self.uuid_dir = f'{self.roots_dir}/{self.uuid}'
-        self.mnt_dir = f'{self.uuid_dir}/mnt'
-        self.unlinked_dir = f'{self.uuid_dir}/.unlinked'
-
-        self.snap_dir = f'{self.uuid_dir}/{self.vol_spec.snapshot_dir_prefix}'
-        self.fscrypt_dir = f'{self.uuid_dir}/.fscrypt'
-
-        self.subvol_dir = self.subvol_dir.encode('utf-8')
-        self.roots_dir = self.roots_dir.encode('utf-8')
-        self.current_meta = self.current_meta.encode('utf-8')
-        # encoded already before calling __init__(), keeping this comment to
-        # prevent accidental re-encoding in future.
-        #self.meta = self.meta.encode('utf-8')
-
-        self.uuid_dir = self.uuid_dir.encode('utf-8')
-        self.mnt_dir = self.mnt_dir.encode('utf-8')
-        self.unlinked_dir = self.unlinked_dir.encode('utf-8')
-
-        self.snap_dir = self.snap_dir.encode('utf-8')
-        self.fscrypt_dir = self.fscrypt_dir.encode('utf-8')
-
-    @staticmethod
-    def version():
-        return SubvolumeV3.VERSION
 
     @property
-    def base_path(self):
-        return self.subvol_dir
+    def vol_spec(self):
+        return self.spec
+
+    @property
+    def subvolname(self):
+        return self.name
+
+    @property
+    def metadata_mgr(self):
+        return self.md
+
+    @property
+    def auth_mdata_mgr(self):
+        return self.auth_md
 
     @property
     def config_path(self):
+        return self.meta_path
+
+    @property
+    def base_path(self):
+        return self.subvol_path
+
+    def snapshot_path(self, snap_name):
         '''
-        Path to meta file for current incarnation of the subvolume.
-
-        NOTE: overriding method from class SubvolumeBase, since meta file's name
-        now contains UUID in it and in class SubvolumeBase UUID can't be
-        accessed.
+        Path to a specific snapshot named 'snap_name'.
         '''
-        return self.meta
+        return self.get_incar_snap_path(snap_name)
+
+    def snapshot_base_path(self):
+        return self.snap_base_path
+
+    def list_snapshots(self):
+        '''
+        :return: list of snap names
+        :rtype: list of str
+        '''
+        return self.get_all_snap_names()
+
+    def snapshot_data_path(self, snap_name):
+        return self.get_incar_snap_path(snap_name)
 
 
-    # following methods either help or do subvolume creation and opening/discovery
+def has_snaps(func):
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        if self.has_snapshots():
+            return func(self, *args, **kwargs)
+    return wrapper
+
+
+class SubvolHelper:
+    '''
+    Basic stuff for subvolumes
+    '''
+
+    def list_dirs(self, path):
+        return listdir(self.fs, path)
+
+    def is_dir_empty(self, path):
+        return is_dir_empty(self.fs, path)
+
+    def list_snaps(self, path):
+        return listsnaps(self.fs, self.spec, path)
+
+
+class V2Helper(SubvolHelper, PreV3Helper):
+    '''
+    For helping SubvoolV3 with its v2 incarnation
+    '''
+
+    def __init__(self, fs, spec, subvol_path, md):
+        self.fs = fs
+        self.spec = spec
+        self.subvol_path =  subvol_path
+        self.md = md
+
+        self._init_cache()
+
+    def _init_cache(self):
+        self._uuid = None
+        self._has_snaps = None
+        self._snap_base_path = None
+
+    def has_snapshots(self):
+        if self._has_snaps in (True, False):
+            return self._has_snaps
+
+        assert self._has_snaps is None
+        self._has_snaps = bool(self.md.get_global_option('has_v2_snaps'))
+        assert self._has_snaps in (True, False)
+        return self._has_snaps
+
+    @property
+    def snap_base_path(self):
+        if self._snap_base_path is None:
+            self._snap_base_path = safe_join(self.subvol_path, self.uuid,
+                                              self.spec.snap_base_dir)
+        else:
+            assert isinstance(self._snap_base_path, str)
+        return self._snap_base_path
+
+    def fetch_uuid(self):
+        dentries = self.list_dirs(self.subvol_path)
+        dentries.remove(b'roots')
+        assert len(dentries) == 1
+        self.ensure_uuid_is_valid(dentries[0])
+        return dentries[0]
+
+    @property
+    def uuid(self):
+        if not self._uuid:
+            self.uuid = self._fetch_uuid()
+        return self._uuid
+
+    @has_snaps
+    def get_snap_path(self, snap_name):
+        return safe_join(self.snap_base_path, snap_name)
+
+    @has_snaps
+    def get_snap_names(self):
+        '''
+        :returns: list of v2 snap names
+        :rtype: list of str
+        '''
+        return self.list_snaps(self.snap_base_path)
+
+
+# TODO: revise this comment to reflect latest updates once layout is approved
+# on the PR.
+class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
+    '''
+    Code for v3 subvolume.
+
+    /volumes/_nogroup/subvol123/roots/<UUIDs>/mnt
+                                                ^ get_incar_mnt_path()
+                                         ^ get_incar_uuid_path()
+                                 ^ roots_path
+                         ^ subvol_path
+
+    /volumes/_nogroup/subvol123/roots/<UUIDs>/.snap/snap123
+                                                      ^ get_v3_snap_path()
+                                                ^ get_incar_snap_base_path()
+
+    /volumes/_nogroup/subvol123/.meta
+                                 ^ meta slink path
+
+    /volumes/_nogroup/subvol123/.meta.<UUID>
+                                  ^ meta path
+
+    /volumes/_nogroup/subvol123/<UUID>/.snap/snap123
+                                              ^ v2.get_snap_path()
+                                        ^ v2.snap_base_path
+    '''
+
+    _VERSION = 3
+
+    def __init__(self, mgr, fs, spec, group, name, uuid=None):
+        self.mgr = mgr
+        self.group = group
+        self.fs = fs
+        self.spec = spec
+
+        self.name = name
+        self.uuid = uuid
+        if self.uuid:
+            ensure_uuid_is_valid(self.uuid)
+        else:
+            self.uuid = str(uuid4())
+
+        self._define_std_paths()
+
+        log.debug(f'loading meta {self.meta_path}')
+        self.md = MetadataManager(self.fs, self.meta_path, 0o640)
+        self.auth_md = AuthMetadataManager(self.fs)
+
+        self.v2 = V2Helper(self.fs, self.spec, self.subvol_path, self.md)
+
+    def _define_std_paths(self):
+        self.subvol_path = safe_join(self.spec.subvol_base_path,
+                                     self.group.name, self.name)
+
+        self.meta_slink_path = safe_join(self.subvol_path, '.meta')
+        self.meta_file_name = f'.meta.{self.uuid}'.encode('utf-8')
+        self.meta_path = safe_join(self.subvol_path, self.meta_file_name)
+
+        self.roots_path = safe_join(self.subvol_path, 'roots')
+        self.uuid_path = safe_join(self.roots_path, self.uuid)
+        self.mnt_path = safe_join(self.uuid_path, 'mnt')
+        self.unlinked_path = safe_join(self.uuid_path, '.unlinked')
+        self.snap_base_path = safe_join(self.uuid_path, self.spec.snap_base_dir)
+
+
+    # ----- basic v3 stuff -----
+
+
+    def get_v3_snap_path(self, snap_name):
+        return safe_join(self.snap_base_path, snap_name)
+
+    def get_incar_uuids(self):
+        return self.list_dirs(self.roots_path)
+
+    def get_incar_uuid_path(self, uuid):
+        return safe_join(self.roots_path, uuid)
+
+    def get_incar_mnt_path(self, uuid):
+        return safe_join(self.get_incar_uuid_path(uuid), 'mnt')
+
+    def get_incar_unlinked_path(self, uuid):
+        return safe_join(self.get_incar_uuid_path(uuid), '.unlinked')
+
+    def get_incar_snap_base_path(self, uuid):
+        return safe_join(self.get_incar_uuid_path(uuid), self.spec.snap_base_dir)
+
+    def get_v3_incar_snap_path(self, snap_name, uuid):
+        return safe_join(self.get_incar_snap_base_path(uuid), snap_name)
+
+
+    # ----- basic stuff for a subvol -----
+
+
+    @staticmethod
+    def version():
+        return SubvolumeV3._VERSION
+
+
+    # ----- methods that helps subvol creation and opening and discovery -----
 
 
     def set_subvol_xattr(self):
-        # set subvolume attr, on subvolume root, marking it as a CephFS subvolume
-        # subvolume root is where snapshots would be taken, and hence is the base_path for v2 subvolumes
+        subvol_xattr = 'ceph.dir.subvolume'
+
         try:
-            # MDS treats this as a noop for already marked subvolume
-            self.fs.setxattr(self.uuid_dir, 'ceph.dir.subvolume', b'1', 0)
+            # MDS treats this as a no-op for already marked subvolume
+            self.fs.setxattr(self.uuid_path, subvol_xattr, b'1', 0)
         except cephfs.InvalidValue:
-            raise VolumeException(-errno.EINVAL, "invalid value specified for ceph.dir.subvolume")
+            raise VolumeException(EINVAL, f'invalid value for {subvol_xattr}')
         except cephfs.Error as e:
             raise VolumeException(-e.args[0], e.args[1])
 
     def _create_v3_layout(self, mode):
-        create_base_dir(self.fs, self.group.path, self.vol_spec.DEFAULT_MODE)
+        create_base_dir(self.fs, self.group.path, self.spec.DEFAULT_MODE)
         self.fs.mkdirs(self.mnt_dir, mode)
+
+    def set_meta_for_curr_incar(self):
+        assert self.uuid == basename(self.meta_path).replace('.meta.', '')
+        self.fs.unlink(self.meta_slink_path)
+
+        self.fs.symlink(self.meta_path, self.meta_slink_path[1:])
 
     def create_or_update_meta_file(self, subvol_type):
         super(SubvolumeV3, self).create_or_update_meta_file(subvol_type)
 
-        try:
-            self.fs.stat(self.current_meta)
-            self.fs.unlink(self.current_meta)
-        except cephfs.ObjectNotFound:
-            pass
-
-        self.fs.symlink(basename(self.meta), self.current_meta)
+        self.set_meta_for_curr_incar()
 
     def _create(self, mode, attrs, subvol_type, auth=True):
         self._create_v3_layout(mode)
@@ -172,12 +292,25 @@ class SubvolumeV3(SubvolumeV2):
         if auth:
             # Create the subvolume metadata file which manages auth-ids if it
             # doesn't exist
-            self.auth_mdata_mgr.create_subvolume_metadata_file(
-                self.group.groupname, self.subvolname)
+            self.auth_md.create_subvolume_metadata_file(self.group.name, self.name)
 
 
-    # following are methods that help or do subvol deletion
+    # ----- methods that for subvol management -----
 
+
+    # TODO: base dir should be deleted in subvol v3 too when no snaps are
+    # retained on any incarnation, right?
+    def trash_base_dir(self):
+        # code under _trash_subvol_path can be move here technically but this
+        # extra layer of call has been added to indicate that in subvol v3
+        # terms
+        self.trash_subvol_path()
+
+    # since there is not in-subvol ".trash" dir in subvol v3, this method
+    # should always return False
+    @property
+    def has_pending_purges(self):
+        return False
 
     @property
     def trash_dir(self):
@@ -192,80 +325,141 @@ class SubvolumeV3(SubvolumeV2):
                            'in-subvol trash dir (which is named ".trash" in'
                            'subvol v2)')
 
-    def trash_subvol_dir(self):
-        create_trashcan(self.fs, self.vol_spec)
+    def trash_subvol_path(self):
+        create_trashcan(self.fs, self.spec)
 
-        with open_trashcan(self.fs, self.vol_spec) as trashcan:
-            trashcan.dump(self.subvol_dir)
+        with open_trashcan(self.fs, self.spec) as trashcan:
+            trashcan.dump(self.subvol_path)
 
-    # TODO: base dir should be deleted in subvol v3 too when no snaps are
-    # retained on any incarnation, right?
-    def trash_base_dir(self):
-        # code under _trash_subvol_dir can be move here technically but this
-        # extra layer of call has been added to indicate that in subvol v3
-        # terms
-        self.trash_subvol_dir()
+    # in subvol v3, self.mnt_dir (AKA data dir) is renamed to ".unlinked" if
+    # subvol is deleted but snapshots are retained.
+    def trash_incarnation_dir(self):
+        self.fs.rename(self.mnt_dir, self.unlinked_dir)
 
-    # since there is not in-subvol ".trash" dir in subvol v3, this method
-    # should always return False
-    @property
-    def has_pending_purges(self):
-        return False
-
-
-    # following are methods that help or do snapshot creation
+    def update_meta_file_after_retain(self):
+        self.md.remove_section(MetadataManager.USER_METADATA_SECTION)
+        self.md.update_section(MetadataManager.GLOBAL_SECTION,
+                                         MetadataManager.GLOBAL_META_KEY_PATH,
+                                         self.unlinked_dir.decode('utf-8'))
+        self.md.update_global_section(
+            MetadataManager.GLOBAL_META_KEY_STATE,
+            SubvolumeStates.STATE_RETAINED.value)
+        self.md.flush()
 
 
-    def snapshot_path(self, snap_name, uuid=None):
+    # ----- methods that help snap creation -----
+
+
+    # XXX: self.uuid can be none if snap is absent but don't raise any exception
+    # in this case since command's behaviour is expected to be idempotent.
+    def get_snap_path(self, snap_name, uuid=None, check_exists=True,
+                      should_raise=True):
         '''
-        Path to a specific snapshot named 'snap_name'.
+        Gets snap path regardless of where it'spresent, v3 incars or v2 or v1.
+        '''
+        snap_path = self.get_v3_incar_snap_path(snap_name, uuid=uuid)
+        if not snap_path:
+            snap_path = self.v2.get_snap_path(snap_name)
+
+        if check_exists:
+            if self.path_exists(snap_path):
+                return snap_path
+            else:
+                if should_raise:
+                    # v2 raises exception if the snapshot path do not exist so do the
+                    # same to prevent any bugs due to difference in behaviour.
+                    #
+                    # not raising exception indeed leads to a bug: the volumes plugin
+                    # fails when exception is not raised by this method when it is
+                    # called by do_clone() method of async_cloner.py. this is made to
+                    # happen by a test by deleting snapshot after running the snapshot
+                    # clone command but before the clone operation actually begins. this
+                    # is done by adding a delay using mgr/volumes/snapshot_clone_delay
+                    # config option.
+                    raise VolumeException(-ENOENT,
+                                          f'snapshot {snap_name} does not exist')
+                else:
+                    return None
+
+    def has_snaps(self, uuid=None):
+        '''
+        Avoid O(n^2) comlexity by prefer this method over list_snapshosts() ot
+        get_snap_names(). v3 can have many incarnations and it's very
+        ineffecient and redundant to use methods since getting all/listing all
+        snap names in every incarnation in this particular case.
         '''
         if uuid:
-            return join(self.roots_dir, uuid,
-                        self.vol_spec.snapshot_prefix.encode('utf-8'),
-                        snap_name.encode('utf-8'))
-        else:
-            return join(self.snapshot_base_path(), snap_name.encode('utf-8'))
+            path = self.get_incar_snap_base_path(uuid)
+            return True if not self.is_dir_empty(path) else False
 
-    def snapshot_base_path(self):
-        return self.snap_dir
+        for uuid in self.get_incar_uuids():
+            path = self.get_incar_snap_base_path(uuid)
+            if not self.is_dir_empty(path):
+                return True
+        return False
 
-    def get_incar_uuid_for_snap(self, snap_name):
+    def get_snap_names(self, uuid=None):
+        path = self.get_incar_snap_base_path(uuid)
+        return self.list_dirs(path)
+
+    def get_v3_uuid_for_snap(self, snap_name):
         '''
-        Return incarnation's UUID in which the snapshot name is present.
-        When multiple incarnations for a subvolume exists, check if a snap
-        exists in one of the incarnations.
+        :returns: UUID of incarnation in which the snap is found.
+        :rtype: str or None
         '''
-        # list of all incarnations/UUID dirs of this subvolume.
-        incars = listdir(self.fs, self.roots_dir)
+        for uuid in self.get_incar_uuids():
+            if snap_name in self.get_snap_names(uuid):
+                return uuid
 
-        for incar_uuid in incars:
-            # construct path to ".snap" directory for given UUID.
-            snap_dir = join(self.roots_dir, incar_uuid,
-                            self.vol_spec.snapshot_dir_prefix.encode('utf-8'))
-            all_snap_names = listdir(self.fs, snap_dir)
-            # encode since listdir() call above returns list of bytes and list
-            # of str
-            if snap_name.encode('utf-8') in all_snap_names:
-                return incar_uuid
-
-        return None
+    def get_uuid_for_snap(self, snap_name):
+        '''
+        :returns: UUID of incarnation in which the snap is found.
+        :rtype: str or None
+        '''
+        uuid = self.get_v3_uuid_for_snap(snap_name)
+        if uuid is None:
+            if self.v2.snap_exists(snap_name):
+                uuid = self.v2.uuid
+        return uuid
 
     def create_snapshot(self, snap_name):
-        if self.get_incar_uuid_for_snap(snap_name) != None:
-            raise VolumeException(errno.EEXIST,
-                                  f'subvolume \'{snap_name}\' already exists')
+        if self.get_uuid_for_snap(snap_name) != None:
+            raise VolumeException(EEXIST,
+                                  f'subvolume {snap_name} already exists')
 
         super(SubvolumeV3, self).create_snapshot(snap_name)
 
+    # TODO, XXX: check if v2 incar snap was deleted and therefore v2 incar has
+    # been deleted completely
     def remove_snapshot(self, snap_name, force):
-        # XXX: UUID can be none if snap is absent but don't raise any exception
-        # in this case since command's behaviour is expected to be idempotent.
-        uuid = self.get_incar_uuid_for_snap(snap_name)
-        snap_path = self.snapshot_path(snap_name, uuid=uuid)
+        snap_path = self.get_snapshot_path(snap_name)
 
         super(SubvolumeV3, self).remove_snapshot(snap_name, force=force,
                                                  snap_path=snap_path)
+
+    def get_v3_snap_names(self):
+        '''
+        :returns: list of names of every snapshots of every incarnations.
+        :rtype: list of str
+        '''
+        all_snap_names = []
+
+        for uuid in self.get_incar_uuids():
+            snap_base_path = self.get_incar_snap_base_path(uuid)
+            snap_names = self.list_snaps(snap_base_path)
+            all_snap_names.extend(snap_names)
+
+        return all_snap_names
+
+    def get_all_snap_names(self):
+        '''
+        :return: list of snap names
+        :rtype: list of str
+        '''
+        snap_names = []
+        snap_names.extend(self.get_v3_snap_names())
+        snap_names.extend(self.v2.get_snap_names())
+        return snap_names
 
     def remove_but_retain_snaps(self):
         assert self.state != SubvolumeStates.STATE_RETAINED
@@ -275,77 +469,15 @@ class SubvolumeV3(SubvolumeV2):
             self.trash_incarnation_dir()
 
             # Delete the volume meta file, if it's not already deleted
-            self.auth_mdata_mgr.delete_subvolume_metadata_file(self.group.groupname, self.subvolname)
+            self.auth_md.delete_subvolume_metadata_file(self.group.name, self.name)
         except MetadataMgrException as e:
             log.error(f"failed to write config: {e}")
             raise VolumeException(e.args[0], e.args[1])
-    # in subvol v3, self.mnt_dir (AKA data dir) is renamed to ".unlinked" if
-    # subvol is deleted but snapshots are retained.
-    def trash_incarnation_dir(self):
-        self.fs.rename(self.mnt_dir, self.unlinked_dir)
-
-    def update_meta_file_after_retain(self):
-        self.metadata_mgr.remove_section(MetadataManager.USER_METADATA_SECTION)
-        self.metadata_mgr.update_section(MetadataManager.GLOBAL_SECTION,
-                                         MetadataManager.GLOBAL_META_KEY_PATH,
-                                         self.unlinked_dir.decode('utf-8'))
-        self.metadata_mgr.update_global_section(
-            MetadataManager.GLOBAL_META_KEY_STATE,
-            SubvolumeStates.STATE_RETAINED.value)
-        self.metadata_mgr.flush()
 
 
-    # Following methods help clone operation -
+    # ----- methods for subvol cloning -----
 
-
-    def snapshot_data_path(self, snap_name):
-        uuid = self.get_incar_uuid_for_snap(snap_name)
-        if uuid == None:
-            raise VolumeException(-errno.ENOENT,
-                                  f'snapshot \'{snap_name}\' does not exist')
-        elif uuid == self.uuid:
-            snap_path = join(self.snapshot_path(snap_name), b'mnt')
-        else:
-            snap_path = join(self.roots_dir, uuid,
-                             self.vol_spec.snapshot_dir_prefix.encode('utf-8'),
-                             snap_name.encode('utf-8'), b'mnt')
-
-        # v2 raises exception if the snapshot path do not exist so do the same
-        # to prevent any bugs due to difference in behaviour.
-        #
-        # not raising exception indeed leads to a bug: the volumes plugin fails
-        # when exception is not raised by this method when it is called by
-        # do_clone() method of async_cloner.py. this is made to happen by a
-        # test by deleting snapshot after running the snapshot clone command
-        # but before the clone operation actually begins. this is done by
-        # adding a delay using mgr/volumes/snapshot_clone_delay config option.
-        try:
-            self.fs.stat(snap_path)
-        except cephfs.ObjectNotFound as e:
-            if e.errno == errno.ENOENT:
-                raise VolumeException(-errno.ENOENT,
-                                      f'snapshot \'{snap_name}\' does not exist')
-            raise VolumeException(-e.args[0], e.args[1])
-
-        return snap_path
 
     @property
     def purgeable(self):
         return False if not self.retained or self.list_snapshots() else True
-
-    def list_snapshots(self):
-        '''
-        Return list of name of all snapshots from all the incarnations.
-        '''
-        # list of all incarnations/UUID dirs of this subvolume.
-        incars = listdir(self.fs, self.roots_dir)
-
-        all_snap_names = []
-
-        for incar_uuid in incars:
-            # construct path to ".snap" directory for given UUID.
-            snap_dir = join(self.roots_dir, incar_uuid,
-                            self.vol_spec.snapshot_dir_prefix.encode('utf-8'))
-            all_snap_names.extend(listsnaps(self.fs, self.vol_spec, snap_dir,
-                                            filter_inherited_snaps=True))
-        return all_snap_names
