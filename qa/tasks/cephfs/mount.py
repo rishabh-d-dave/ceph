@@ -612,8 +612,7 @@ class CephFSMountBase(object):
 
         for k in verify_keys:
             v = kwargs.get(k)
-            if v is not None:
-                setattr(self, k, v)
+            setattr(self, k, v)
 
         self.write_keyring()
 
