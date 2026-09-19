@@ -122,8 +122,8 @@ class CephFSTestCase(CephTestCase):
         super(CephFSTestCase, self).setUp()
 
         assert type(self.mounts) is list and len(self.mounts) > 0
-        # indicate types to linters
-        self.mounts = setattr(self, 'mounts', [])
+        # dummy statement to indicate type to linters to make them happy
+        self.mounts = self.mounts if self.mounts else []
 
         self.config_set('mon', 'mon_allow_pool_delete', True)
 

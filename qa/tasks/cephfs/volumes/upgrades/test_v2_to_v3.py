@@ -57,7 +57,7 @@ class SubvolHelper:
         self.retained = retained
         self._verify_attrs()
 
-        self._define_paths()
+        #self._define_paths()
         self.writer = writer
 
     def _get_tco_stuff(self):

@@ -41,14 +41,15 @@ def validate_client_id_and_keyring(id_, keyring=None):
             f'{keyring}')
 
     assert 'client.' not in id_, msg1
-    assert f'[{client_sec}]' in keyring, msg2
+    if keyring:
+        assert f'[{client_sec}]' in keyring, msg2
 
 
 class CephFSMountBase(object):
     def __init__(self, ctx, test_dir, client_id, client_remote,
-                 client_keyring_path=None, hostfs_mntpt=None,
-                 cephfs_name=None, cephfs_mntpt=None, brxnet=None,
-                 client_config=None):
+                 client_keyring=None, client_keyring_path=None,
+                 hostfs_mntpt=None, cephfs_name=None, cephfs_mntpt=None,
+                 client_config=None, brxnet=None):
         """
         :param test_dir: Global teuthology test dir
         :param client_id: Client ID, the 'foo' in client.foo
@@ -75,6 +76,7 @@ class CephFSMountBase(object):
 
         self.cephfs_name = cephfs_name
         self.client_id = client_id
+        self.client_keyring = client_keyring
         self.client_keyring_path = client_keyring_path
         self.write_keyring()
         self.client_remote = client_remote
@@ -594,20 +596,10 @@ class CephFSMountBase(object):
 
             client_keyring = kwargs.pop('client_keyring', None)
 
-        verify_keys = [
-          'client_id',
-          'client_name',
-          'client_keyring_path',
-          'hostfs_mntpt',
-          'cephfs_name',
-          'cephfs_mntpt',
-        ]
-
-        self._verify_attrs(**{key: kwargs[key] for key in verify_keys if key in kwargs})
-        self.validate_client_id_and_keyring()
-
-        for k, v in verify_keys.items():
+        self._verify_attrs(**kwargs)
+        for k, v in kwargs.items():
             setattr(self, k, v)
+        self.validate_client_id_and_keyring()
 
         self.write_keyring()
 
