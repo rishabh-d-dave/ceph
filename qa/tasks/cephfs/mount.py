@@ -18,6 +18,7 @@ from teuthology.orchestra.run import Raw
 from teuthology.exceptions import CommandFailedError, ConnectionLostError
 
 from tasks.cephfs.filesystem import Filesystem
+from .helpers.gen_io_load import GenIoLoad
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +32,17 @@ class DirectoryNotEmptyError(SystemError):
     pass
 class OperationNotPermittedError(SystemError):
     pass
+
+def validate_client_id_and_keyring(id_, keyring=None):
+    # client_sec = client section
+    client_sec = f'[client.{id_}]'
+    msg1 = f'client id should not have "client." prefix. client_id = {id_}'
+    msg2 = (f'"{client_sec}" not found in in client keyring. client_keyring = '
+            f'{keyring}')
+
+    assert 'client.' not in id_, msg1
+    assert f'[{client_sec}]' in keyring, msg2
+
 
 class CephFSMountBase(object):
     def __init__(self, ctx, test_dir, client_id, client_remote,
@@ -64,6 +76,7 @@ class CephFSMountBase(object):
         self.cephfs_name = cephfs_name
         self.client_id = client_id
         self.client_keyring_path = client_keyring_path
+        self.write_keyring()
         self.client_remote = client_remote
         self.cluster_name = 'ceph' # TODO: use config['cluster']
         self.fs = None
@@ -566,9 +579,28 @@ class CephFSMountBase(object):
                 raise RuntimeError('value of attributes should be either str '
                                    f'or None. {k} - {v}')
 
+    def validate_client_id_and_keyring(self):
+        validate_client_id_and_keyring(self.client_id, self.client_keyring)
+
     def update_attrs(self, **kwargs):
+        if kwargs.get('client_keyring', None):
+            client_id = kwargs.get('client_id', None)
+            client_name = kwargs.get('client_name', None)
+            if client_id and client_name:
+                assert client_name == f'client.{client_id}'
+            elif client_id and not client_name:
+                client_name = f'client.{client_id}'
+            elif not client_id and client_name:
+                client_id = client_name.replace('client.', '')
+            elif not client_id and not client_name:
+                client_id = self.client_id
+                client_name = f'client.{client_id}'
+
+            client_keyring = kwargs.pop('client_keyring', None)
+
         verify_keys = [
           'client_id',
+          'client_name',
           'client_keyring_path',
           'hostfs_mntpt',
           'cephfs_name',
@@ -576,11 +608,14 @@ class CephFSMountBase(object):
         ]
 
         self._verify_attrs(**{key: kwargs[key] for key in verify_keys if key in kwargs})
+        self.validate_client_id_and_keyring()
 
         for k in verify_keys:
             v = kwargs.get(k)
             if v is not None:
                 setattr(self, k, v)
+
+        self.write_keyring()
 
     def remount(self, **kwargs):
         """
@@ -651,6 +686,12 @@ class CephFSMountBase(object):
     def get_keyring_path(self):
         # N.B.: default keyring is /etc/ceph/ceph.keyring; see ceph.py and generate_caps
         return '/etc/ceph/ceph.client.{id}.keyring'.format(id=self.client_id)
+
+    def write_keyring(self):
+        if self.client_keyring and not self.client_keyring_path:
+            self.client_keyring_path = self.client_remote.mktemp(
+                    suffix=f'ceph.{self.client_name}.keyring',
+                    data=self.client_keyring)
 
     def get_key_from_keyfile(self):
         # XXX: don't call run_shell(), since CephFS might be unmounted.
@@ -1273,6 +1314,13 @@ class CephFSMountBase(object):
                                "count={0}".format(int(n_mb)),
                                "seek={0}".format(int(seek))
                                ], wait=wait)
+
+    def gen_io_load(self, path, raise_on_thread_crash=False, timeout=60*60*15,
+                    sleep=0):
+        writer = GenIoLoad(self, path=path, timeout=timeout, sleep=sleep,
+                           raise_on_thread_crash=raise_on_thread_crash)
+        writer.start()
+        return writer
 
     def write_test_pattern(self, filename, size):
         log.info("Writing {0} bytes to {1}".format(size, filename))
