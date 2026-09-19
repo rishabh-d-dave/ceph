@@ -610,8 +610,7 @@ class CephFSMountBase(object):
         self._verify_attrs(**{key: kwargs[key] for key in verify_keys if key in kwargs})
         self.validate_client_id_and_keyring()
 
-        for k in verify_keys:
-            v = kwargs.get(k)
+        for k, v in verify_keys.items():
             setattr(self, k, v)
 
         self.write_keyring()
