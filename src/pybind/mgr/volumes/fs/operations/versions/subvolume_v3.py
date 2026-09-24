@@ -55,18 +55,8 @@ class PreV3Helper:
         return self.get_incar_snap_base_path()
 
     def snapshot_path(self, snap_name):
-        return self.get_incar_snap_path(snap_name)
-
-    def snapshot_data_path(self, snap_name):
         if snap_path := self.get_snap_path(snap_name):
             return snap_path
-
-    def list_snapshots(self):
-        '''
-        :return: list of snap names
-        :rtype: list of str
-        '''
-        return self.get_snap_names()
 
         # TODO
         # v2 raises exception if the snapshot path do not exist so do the same
@@ -79,6 +69,18 @@ class PreV3Helper:
         # the clone operation actually begins. this is done by a adding a delay
         # using mgr/volumes/snapshot_clone_delay config option.
         raise VolumeException(ENOENT, f'snapshot {snap_name} doesnt exist')
+
+
+    def snapshot_data_path(self, snap_name):
+        return self.snapshot_path(snap_name)
+
+    def list_snapshots(self):
+        '''
+        :return: list of snap names
+        :rtype: list of str
+        '''
+        return self.get_snap_names()
+
 
     @property
     def trash_dir(self):
@@ -111,7 +113,7 @@ class SubvolHelper:
     def statx(self, path, fields):
         return statx(self.fs, path, fields)
 
-    def path_exists(self, path):
+    def path_exists(self, path, follow_symlink=True):
         return path_exists(self.fs, path)
 
     def get_all_xattrs(self, path):
@@ -244,7 +246,7 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
             self.md.refresh()
 
     def _get_v2_helper(self, uuid=None):
-        if type(uuid) in (bytes str):
+        if type(uuid) in (bytes, str):
             if has_v2_snaps := self.md.get_global_option('has_v2_snaps', None):
                 assert has_v2_snaps is True
                 v2 = V2Helper(self.fs, self.spec, self.subvol_path, uuid)
@@ -376,9 +378,9 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
                            'subvol v2)')
 
     def trash_subvol_dir(self):
-        create_trashcan(self.fs, self.vol_spec)
+        create_trashcan(self.fs, self.spec)
 
-        with open_trashcan(self.fs, self.vol_spec) as trashcan:
+        with open_trashcan(self.fs, self.spec) as trashcan:
             trashcan.dump(self.subvol_path)
 
     # TODO: base dir should be deleted in subvol v3 too when no snaps are
@@ -388,12 +390,6 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
         # extra layer of call has been added to indicate that in subvol v3
         # terms
         self.trash_subvol_dir()
-
-    def trash_subvol_dir(self):
-        create_trashcan(self.fs, self.spec)
-
-        with open_trashcan(self.fs, self.spec) as trashcan:
-            trashcan.dump(self.subvol_path)
 
     def trash_uuid_dir(self, uuid):
         create_trashcan(self.fs, self.spec)
@@ -577,15 +573,6 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
                 self.trash_uuid_dir(uuid)
                 raise vol_exc
         return False
-
-    def update_meta_file_after_retain(self):
-        self.metadata_mgr.remove_section(MetadataManager.USER_METADATA_SECTION)
-
-        self.metadata_mgr.update_global_section('state', self.unlinked_path)
-        self.metadata_mgr.update_global_section('path',
-                                                SubvolumeStates.STATE_RETAINED.value)
-
-        self.metadata_mgr.flush()
 
     def deactivate_curr_incar(self):
         self.fs.rename(self.get_mnt_path(), self.unlinked_dir)

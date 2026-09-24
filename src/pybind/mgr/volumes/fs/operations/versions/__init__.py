@@ -116,17 +116,17 @@ class SubvolumeLoader(object):
             disc_version, disc_uuid = base_subvol.discover()
 
             if disc_version < 2:
-                version = int(subvolume.metadata_mgr.get_global_option('version'))
+                version = int(base_subvol.metadata_mgr.get_global_option('version'))
                 subvol_class = self._get_subvolume_version(version)
 
                 subvol_obj = subvol_class(mgr, fs, vol_spec, group, subvolname,
-                                          legacy=subvolume.legacy_mode)
+                                          legacy=base_subvol.legacy_mode)
                 subvol_obj.metadata_mgr.refresh()
                 subvol_obj.clean_stale_snapshot_metadata()
                 return subvol_obj
             elif disc_version <= 3:
                 return SubvolumeV3(mgr=mgr, fs=fs, spec=vol_spec, group=group,
-                                   name=name, uuid=disc_uuid,
+                                   name=subvolname, uuid=disc_uuid,
                                    disc_version=disc_version)
             else:
                 assert False, (f'discovered unexpected version. disc_version = '

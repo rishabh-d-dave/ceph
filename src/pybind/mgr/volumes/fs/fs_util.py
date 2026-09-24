@@ -309,9 +309,9 @@ def statx(fs, path, fields=None, follow_symlink=True):
         return True
 
     sxb_fields = []
-     if 'uid' in fields:
+    if 'uid' in fields:
         sxb_fields.append(int(sxb['uid']))
-     if 'gid' in fields:
+    if 'gid' in fields:
         sxb_fields.append(int(sxb['gid']))
     if 'mode' in fields:
         sxb_fields.append(int(sxb['mode']))
