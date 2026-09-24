@@ -114,6 +114,8 @@ class SubvolumeLoader(object):
 
         try:
             disc_version, disc_uuid = base_subvol.discover()
+            log.info(f'discovered version = {disc_version} discovered uuid = '
+                     f'{disc_uuid}')
 
             if disc_version < 2:
                 version = int(base_subvol.metadata_mgr.get_global_option('version'))

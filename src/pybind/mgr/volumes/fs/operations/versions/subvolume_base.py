@@ -523,6 +523,7 @@ class SubvolumeBase(object):
 
             assert disc_version in (3, 2, 1, 0),\
                 f'discovered invalid version: {disc_version}'
+            return disc_version, disc_uuid
 
             # TODO: after v3 upgrades are done, this "fabricated stuff" perhaps
             # needs to removed...
@@ -530,7 +531,8 @@ class SubvolumeBase(object):
             # subvolume with retained snapshots has empty path, don't mistake it for
             # fabricated metadata.
             if (not self.legacy_mode and
-                self.state != SubvolumeStates.STATE_RETAINED):
+                self.state != SubvolumeStates.STATE_RETAINED and
+                sv_path != base_path):
                 raise MetadataMgrException(-errno.ENOENT, 'fabricated .meta')
 
             if disc_version not in (0, 1):

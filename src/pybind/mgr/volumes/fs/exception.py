@@ -20,9 +20,11 @@ class VolumeException(Exception):
 
         if self.errno:
             self.errcode = errorcode.get(abs(self.errno), 'UNKNOWN_ERROR')
-        # since error numbers are always negative.
-        if self.errno > 0:
-            self.errno = -self.errno
+            # since error numbers are always negative.
+            if self.errno > 0:
+                self.errno = -self.errno
+        else:
+            self.errcode = None
 
         log.info(self)
 

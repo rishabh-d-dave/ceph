@@ -129,22 +129,28 @@ class V2Helper(SubvolHelper, PreV3Helper):
     '''
 
     def __init__(self, fs=None, spec=None, subvol_path=None, uuid=None):
+        self.uuid = uuid
+        if self.uuid is False:
+            return
+
         self.fs = fs
         self.spec = spec
         self.subvol_path = subvol_path
 
-        self.uuid = uuid
-        if self.uuid is False:
-            pass
-        elif self.uuid is None:
+        if self.uuid is None:
             self.uuid = self.fetch_uuid()
+            validate_uuid(self.uuid)
+        else:
+            validate_uuid(self.uuid)
 
-        validate_uuid(self.uuid)
-
+        self.meta_path = safe_join(self.subvol_path, '.meta')
         self.uuid_path = safe_join(self.subvol_path, self.uuid)
         self.snap_base_path = safe_join(self.uuid_path, self.spec.snap_base_dir)
 
     def fetch_uuid(self):
+        if self.uuid is False:
+            assert False
+
         dentries = self.list_dirs(self.subvol_path)
         dentries.remove(b'roots')
         assert len(dentries) == 1
@@ -215,12 +221,11 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
             self.uuid = gen_uuid()
 
         self._define_basic_paths()
-        self._define_md_attrs()
-
         # can be removed?
         self.creating = not self.path_exists(self.subvol_path)
 
         if self.version() == disc_version:
+            self._define_basic_paths()
             self._define_md_attrs()
             self.v2 = self._get_v2_helper()
         else:
@@ -246,15 +251,12 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
             self.md.refresh()
 
     def _get_v2_helper(self, uuid=None):
-        if type(uuid) in (bytes, str):
-            if has_v2_snaps := self.md.get_global_option('has_v2_snaps', None):
-                assert has_v2_snaps is True
-                v2 = V2Helper(self.fs, self.spec, self.subvol_path, uuid)
-                assert v2.uuid == uuid
-        elif uuid is None:
-                return V2Helper(self.fs, self.spec, self.subvol_path)
-        elif uuid is False:
+        if uuid is False:
             return V2Helper(uuid=False)
+        elif uuid is None:
+            return V2Helper(self.fs, self.spec, self.subvol_path)
+        elif type(uuid) in (bytes, str):
+            return V2Helper(self.fs, self.spec, self.subvol_path, uuid)
         else:
             assert False
 
@@ -263,37 +265,22 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
 
 
     def get_incar_path(self, uuid=None):
-        if self.v2.uuid == uuid:
-            return self.v2.uuid_path
-
         uuid = uuid if uuid else self.uuid
         return safe_join(self.roots_path, uuid)
 
     def get_incar_mnt_path(self, uuid=None):
-        if self.v2.uuid == uuid:
-            assert False, 'v2 incar can\'t have mnt dir/path'
-
         uuid = uuid if uuid else self.uuid
         return safe_join(self.get_incar_path(uuid), 'mnt')
 
     def get_incar_unlinked_path(self, uuid=None):
-        if self.v2.uuid == uuid:
-            assert False, 'v2 incar can\'t have unlinked dir/path'
-
         uuid = uuid if uuid else self.uuid
         return safe_join(self.get_incar_path(uuid), '.unlinked')
 
     def get_incar_snap_base_path(self, uuid=None):
-        if self.v2.uuid == uuid:
-            return self.v2.get_snap_base_path
-
         uuid = uuid if uuid else self.uuid
         return safe_join(self.get_incar_path(uuid), self.spec.snap_base_dir)
 
     def get_incar_snap_path(self, snap_name, uuid=None):
-        if self.v2.uuid == uuid:
-            return self.v2.get_snap_path(snap_name)
-
         uuid = uuid if uuid else self.uuid
         return safe_join(self.get_incar_snap_base_path(uuid), snap_name)
 
@@ -500,6 +487,9 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
             else:
                 # shouldn't have reached here
                 assert False
+        else:
+            # shouldn't have reached here
+            assert False
 
         return False
 
@@ -661,7 +651,7 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
         mds_caps += (f', allow rw fsname={volname}  path={mnt_path}')
         self.update_caps(client_name, mon_caps, osd_caps, mds_caps)
 
-        time_sleep(10)
+        #time_sleep(10)
 
     def rm_v2_caps_from_client_keyring(self):
         pass
@@ -675,17 +665,18 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
                                                             'mode'))
             sv_xattrs = self.get_all_xattrs(self.v2.uuid_path)
 
-            self.fs.mkdirs(self.uuid_path, 0o755)
-            if self.v2.has_snaps:
-                self.fs.mkdir(self.mnt_path, 0o755)
+            v3_mnt_path = self.get_incar_mnt_path()
+            self.fs.mkdirs(self.get_incar_path(), 0o755)
+            if self.v2.has_snap():
+                self.fs.mkdir(v3_mnt_path, 0o755)
             else:
-                self.fs.rename(self.v2.uuid_path, self.mnt_path)
+                self.fs.rename(self.v2.uuid_path, v3_mnt_path)
 
-            self.fs.chown(self.mnt_path, uid, gid)
-            self.fs.chmod(self.mnt_path, mode)
+            self.fs.chown(v3_mnt_path, uid, gid)
+            self.fs.chmod(v3_mnt_path, mode)
 
             if sv_xattrs:
-                self.set_all_xattrs(self.mnt_path, sv_xattrs)
+                self.set_all_xattrs(v3_mnt_path, sv_xattrs)
 
             self.fs.rename(self.v2.meta_path, self.meta_path)
             self.fs.symlink(self.meta_file_name, self.meta_symlink_path[1:])
@@ -708,8 +699,10 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
         try:
             self.md.refresh()
 
+            log.info(f'mark123 self.version = {self.version()}')
+            log.info(f'mark123 mnt_path = {self.get_incar_mnt_path()}')
             self.md.update_global_section('version', self.version())
-            self.md.update_global_section('path', self.mnt_path)
+            self.md.update_global_section('path', self.get_incar_mnt_path())
             if self.v2.has_snap():
                 self.md.update_global_section('has_v2_snaps', True)
 
@@ -726,15 +719,70 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
         self.v2 = self._get_v2_helper(self.uuid)
         if self.v2.has_snap():
             self.uuid = gen_uuid()
+        self.meta_file_name = to_bytes(f'.meta.{self.uuid}')
+        self.meta_path = safe_join(self.subvol_path, self.meta_file_name)
 
         self.add_v3_caps_to_client_keyring()
 
         self._upgrade_v2_to_v3_layout()
+        # define basic paths since we now know v3 uuid
         self._define_md_attrs()
-        self._update_v2_to_v3_meta()
-
         # re-define v2 helper if v2 incar is moved.
         if self.uuid == self.v2.uuid:
             self.v2 = self._get_v2_helper(False)
+        self._update_v2_to_v3_meta()
+
         self.clean_stale_snapshot_metadata()
         self.rm_v2_caps_from_client_keyring()
+
+    def _upgrade_from_v1_to_v3(self):
+        self.v1 = _get_v1_helper()
+        try:
+            uid, gid, mode = self.statx(self.v2.uuid_path, ('uid', 'gid',
+                                                            'mode'))
+            sv_xattrs = self.get_all_xattrs(self.v1.uuid_path)
+
+            v3_mnt_path = self.get_incar_mnt_path()
+            self.fs.mkdirs(self.get_incar_path(), 0o755)
+            if self.v1.has_snap():
+                self.fs.mkdir(v3_mnt_path, 0o755)
+            else:
+                self.fs.rename(self.v1.uuid_path, v3_mnt_path)
+
+            self.fs.chown(v3_mnt_path, uid, gid)
+            self.fs.chmod(v3_mnt_path, mode)
+
+            if sv_xattrs:
+                self.set_all_xattrs(v3_mnt_path, sv_xattrs)
+
+            self.fs.rename(self.v1.meta_path, self.meta_path)
+            self.fs.symlink(self.meta_file_name, self.meta_symlink_path[1:])
+
+            for path in (self.meta_path, self.meta_symlink_path):
+                self.fs.chown(path, 0, 0)
+                self.fs.chmod(path, 644)
+        except Error as e:
+            raise SubvolUpgradeError(-e.args[0],
+                                     f'error upgrading subvol {self.name} '
+                                     f'from v2 to v3. exception raised: {e}')
+
+        log.info(f'layout upgrade for subvol {self.name} was successful, '
+                 'updating its metadata file...')
+
+    def _update_v1_to_v3_meta(self):
+        log.info(f'updating meta since subvol {self.name} has been '
+                 'auto-upgraded from v2 to v2')
+
+        try:
+            self.md.refresh()
+
+            self.md.update_global_section('version', self.version())
+            self.md.update_global_section('path', self.get_incar_mnt_path())
+            if self.v1.has_snap():
+                self.md.update_global_section('has_v2_snaps', True)
+
+            self.md.flush()
+        except MetadataMgrException as e:
+            raise VolumeException(-e.args[0],
+                                  'error updating subvol metadata during '
+                                  'subvol upgrade from v2 to v3')
