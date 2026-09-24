@@ -117,7 +117,7 @@ class SubvolumeLoader(object):
 
             if disc_version < 2:
                 version = int(base_subvol.metadata_mgr.get_global_option('version'))
-                subvol_class = self._get_subvolume_version(version)
+                subvol_class = self.get_subvolume_class(version)
 
                 subvol_obj = subvol_class(mgr, fs, vol_spec, group, subvolname,
                                           legacy=base_subvol.legacy_mode)

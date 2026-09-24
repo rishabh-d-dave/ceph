@@ -185,13 +185,13 @@ class SubvolHelper:
 
     def authorize(self):
         authorize_cmd = (f'fs subvolume authorize {self.volname} {self.name} '
-                         f'{self.client_id}')
+                         f'{client_id}')
         if self.grp_name:
             authorize_cmd += f' --group-name {self.grp_name}'
 
         self.run_ceph_cmd(authorize_cmd)
 
-    def create_subvol_client_and_remount(self, path):
+    def create_subvol_client_and_remount(self, client_id, path):
         # right now only v2 path is supported
         assert dirname(path) == self.subvol_path
 
@@ -200,22 +200,22 @@ class SubvolHelper:
         v3_path = join(dirname(path), 'roots', uuid_, 'mnt')
 
         keyring = self.create_client(
-                self.client_id, moncap='allow r',
+                client_id, moncap='allow r',
                 osdcap=f'allow rw pool={self.fs.data_pool_name}',
                 mdscap=f'allow rw path=/{path}, allow rw path=/{v3_path}')
-        #keyring = self.get_ceph_cmd_stdout(f'auth get client.{self.client_id}')
+        #keyring = self.get_ceph_cmd_stdout(f'auth get client.{client_id}')
 
         key_path = self.mount_b.client_remote.mktemp(
-                suffix=f'ceph.client.{self.client_id}.keyring', data=keyring)
+                suffix=f'ceph.client.{client_id}.keyring', data=keyring)
 
-        self.mount_b.remount(client_id=self.client_id,
+        self.mount_b.remount(client_id=client_id,
                              client_keyring_path=key_path, cephfs_mntpt=path)
 
     def gen_io_load_via_fs_client(self):
         self.writer = self.mount_b.gen_io_load('/')
 
-    def gen_io_load_via_subvol_client(self, path):
-        self.create_subvol_client_and_remount(path)
+    def gen_io_load_via_subvol_client(self, client_id, path):
+        self.create_subvol_client_and_remount(client_id, path)
         self.writer = self.mount_b.gen_io_load('/')
 
 
@@ -401,7 +401,6 @@ class TestBasic(VolumesHelper):
     Test subvol upgrade from v2 to v3.
     '''
 
-    client_id = 'x1'
     CLIENTS_REQUIRED = 2
 
     def test_regular_basic_subvol(self):
@@ -508,6 +507,7 @@ class TestWithIoLoad(VolumesHelper):
     Test subvol upgrade from v2 to v3 while IO is being performed on the subvol.
     '''
 
+    client_id = 'x1'
     CLIENTS_REQUIRED = 2
 
     def test_regular_basic_subvol_with_workload_via_fs_client(self):
@@ -556,7 +556,7 @@ class TestWithIoLoad(VolumesHelper):
         v2.custom_create()
         v2.sanity_test_subvol()
 
-        v2.gen_io_load_via_subvol_client(v2.uuid_path)
+        v2.gen_io_load_via_subvol_client(self.client_id, v2.uuid_path)
         log.info('giving 60 seconds for background threads for writing...')
         time_sleep(5)
 

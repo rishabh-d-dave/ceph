@@ -533,10 +533,11 @@ class SubvolumeBase(object):
                 self.state != SubvolumeStates.STATE_RETAINED):
                 raise MetadataMgrException(-errno.ENOENT, 'fabricated .meta')
 
-            meta_version = int(self.metadata_mgr.get_global_option('version'))
-            assert disc_version == meta_version, \
-                (f'subvol version from meta file doesn\'t match dicovered version. '
-                 f'disc_version = {disc_version}, meta_version = {meta_version}')
+            if disc_version not in (0, 1):
+                meta_version = int(self.metadata_mgr.get_global_option('version'))
+                assert disc_version == meta_version, \
+                    (f'subvol version from meta file doesn\'t match dicovered version. '
+                     f'disc_version = {disc_version}, meta_version = {meta_version}')
 
             return disc_version, disc_uuid
         except MetadataMgrException as me:

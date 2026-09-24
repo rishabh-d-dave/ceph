@@ -15,7 +15,7 @@ class VolumeException(Exception):
         assert (errno and errmsg) or exception
 
         self.errno = errno
-        self.errsmg = errmsg
+        self.errmsg = errmsg
         self.exception = exception
 
         if self.errno:
