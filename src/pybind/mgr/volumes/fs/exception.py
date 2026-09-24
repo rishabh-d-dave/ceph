@@ -55,6 +55,10 @@ class OpSmException(VolumeException):
     pass
 
 
+class InvalidUuidError(VolumeException):
+    pass
+
+
 class EvictionError(VolumeException):
     pass
 
