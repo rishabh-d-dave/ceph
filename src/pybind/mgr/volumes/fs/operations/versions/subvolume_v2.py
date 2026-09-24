@@ -379,7 +379,7 @@ class SubvolumeV2(SubvolumeV1):
         return True
 
     def remove(self, retainsnaps=False, internal_cleanup=False):
-        if self.list_snapshots():
+        if self.has_snaps():
             if not retainsnaps:
                 raise VolumeException(-errno.ENOTEMPTY, "subvolume '{0}' has snapshots".format(self.subvolname))
         else:
