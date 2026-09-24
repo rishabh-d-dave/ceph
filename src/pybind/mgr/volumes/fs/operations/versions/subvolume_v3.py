@@ -164,7 +164,7 @@ class V2Incar(SubvolHelper, PreV3Helper):
     For helping SubvolV3 with its v2 incarnation.
     '''
 
-    def __init__(self, fs, spec, base_path, md):
+    def __init__(self, fs, spec, base_path, md, creating_v3):
         self.fs = fs
         self.spec = spec
         self.base_path: Final = base_path
@@ -450,7 +450,8 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
     @property
     def v2(self):
         if not self._v2:
-            self._v2 = V2Incar(self.fs, self.spec, self.base_path, self.md)
+            self._v2 = V2Incar(self.fs, self.spec, self.base_path, self.md,
+                               self.creating)
         return self._v2
 
     def _reset_v2_helper(self):
