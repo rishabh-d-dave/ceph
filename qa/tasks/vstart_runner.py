@@ -1206,13 +1206,10 @@ class LogStream(object):
         self.buffer = ''
 
     def flush(self):
-        pass
+        self._write()
 
-    def __del__(self):
-        try:
-            self._write()
-        except Exception:
-            pass
+    def __exit__(self):
+        self._write()
 
 
 class InteractiveFailureResult(unittest.TextTestResult):
