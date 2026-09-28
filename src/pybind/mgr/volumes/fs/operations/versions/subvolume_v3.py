@@ -402,3 +402,52 @@ class SubvolumeV3(SubvolumeV2):
         except MetadataMgrException as e:
             log.error(f"failed to write config: {e}")
             raise VolumeException(e)
+
+
+    # ----- methods for snap clone -----
+
+
+    def snapshot_data_path(self, snap_name):
+        uuid = self.get_incar_uuid_for_snap(snap_name)
+        if uuid == None:
+            raise VolumeException(ENOENT, f'snap "{snap_name}" does not exist')
+        elif uuid == self.uuid:
+            snap_path = join(self.snapshot_path(snap_name), 'mnt')
+        else:
+            snap_path = join(self.roots_dir, uuid,
+                             self.vol_spec.snapshot_dir_prefix.encode('utf-8'),
+                             snap_name.encode('utf-8'), b'mnt')
+
+        # v2 raises exception if the snapshot path do not exist so do the same
+        # to prevent any bugs due to difference in behaviour.
+        #
+        # not raising exception indeed leads to a bug: the volumes plugin fails
+        # when exception is not raised by this method when it is called by
+        # do_clone() method of async_cloner.py. this is made to happen by a
+        # test by deleting snapshot after running the snapshot clone command
+        # but before the clone operation actually begins. this is done by
+        # adding a delay using mgr/volumes/snapshot_clone_delay config option.
+        try:
+            self.fs.stat(snap_path)
+        except cephfs.Error as e:
+            if abs(e.errno) == ENOENT:
+                raise VolumeException(ENOENT, f'snap "{snap_name}" does not exist')
+            raise VolumeException(e)
+
+        return snap_path
+
+    def list_snapshots(self):
+        '''
+        Return list of name of all snapshots from all the incarnations.
+        '''
+        # list of all incarnations/UUID dirs of this subvolume.
+        incars = listdir(self.fs, self.roots_dir)
+
+        all_snap_names = []
+
+        for incar_uuid in incars:
+            # construct path to ".snap" directory for given UUID.
+            snap_dir = join(self.roots_dir, incar_uuid,
+                            self.vol_spec.snapshot_dir_prefix.encode('utf-8'))
+            all_snap_names.extend(list_snaps(self.fs, self.vol_spec, snap_dir))
+        return all_snap_names
