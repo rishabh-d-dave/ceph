@@ -69,6 +69,32 @@ class PreV3Helper:
         # terms
         self.trash_subvol_dir()
 
+    def snapshot_path(self, snap_name):
+        if snap_path := self.get_snap_path(snap_name):
+            return snap_path
+
+        # TODO
+        # v2 raises exception if the snapshot path do not exist so do the same
+        # to prevent any bugs due to difference in behaviour.
+        #
+        # not raising exception indeed leads to a bug: the volumes plugin fails
+        # when exception is not raised by this method when it is calld by
+        # do_clone() method of async_cloner.py. this is made to happen by a test
+        # by deleting snapshot after running the snapshot clone cmd but before
+        # the clone operation actually begins. this is done by a adding a delay
+        # using mgr/volumes/snapshot_clone_delay config option.
+        raise VolumeException(ENOENT, f'snap "{snap_name}" does not exist')
+
+    def snapshot_data_path(self, snap_name):
+        return self.get_snap_path(snap_name)
+
+    def list_snapshots(self):
+        '''
+        :return: list of snap names
+        :rtype: list of str
+        '''
+        return self.get_snap_names()
+
 
 class SubvolHelper:
     '''
@@ -255,6 +281,20 @@ class SubvolumeV3(SubvolumeV2):
     # ----- helper methods for snap code -----
 
 
+    def get_snap_names(self, uuid):
+        names = []
+        if uuid:
+            path = self.get_incar_snap_base_path(uuid)
+            return self.list_snaps(path)
+        else:
+            snap_names = []
+            for uuid in self.get_incars():
+                path = self.get_incar_snap_base_path(uuid)
+                snap_names += self.list_snaps(path)
+            return snap_names
+
+        return []
+
     # Listing all snaps can be expensive due to multiple snaps in multiple
     # incarnations. So, don't list all snaps unnecessarily, use this instead.
     def has_snap(self, snap_name=None, uuid=None):
@@ -289,6 +329,20 @@ class SubvolumeV3(SubvolumeV2):
 
     # ----- methods for snaps -----
 
+
+    def get_snap_path(self, snap_name):
+        '''
+        Gets snap path regardless of where it's present: v3 or v2.
+        '''
+        snap_name = to_utf8(snap_name)
+
+        snap_path = None
+        if uuid := self.get_incar_for_snap_name(snap_name, v2=True):
+            snap_path = self.v2.get_snap_path(snap_name)
+        elif uuid := self.get_incar_for_snap_name(snap_name, v3=True):
+            snap_path = self.get_incar_snap_path(uuid, snap_name)
+
+        return snap_path if self.path_exists(snap_path) else None
 
     def create_snapshot(self, snap_name):
         snap_name = to_utf8(snap_name)
