@@ -830,6 +830,7 @@ class VolumeClient(CephfsClient["Module"]):
         force      = kwargs['force']
 
         try:
+            should_trigger = False
             with open_volume(self, volname) as fs_handle:
                 with open_group(fs_handle, self.volspec, groupname) as group:
                     op = SubvolumeOpType.SNAP_REMOVE_FORCE if force else SubvolumeOpType.SNAP_REMOVE
