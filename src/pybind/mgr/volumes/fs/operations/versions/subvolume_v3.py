@@ -81,6 +81,9 @@ class SubvolHelper:
     def path_exists(self, path):
         return path_exists(self.fs, path)
 
+    def list_snaps(self, path):
+        return listsnaps(self.fs, self.spec, path)
+
 
 class SubvolumeV3(SubvolumeV2):
     '''
@@ -246,4 +249,72 @@ class SubvolumeV3(SubvolumeV2):
     def has_pending_purges(self):
         # since there is not in-subvol ".trash" dir in subvol v3, this method
         # should always return False
+        return False
+
+
+    # ----- helper methods for snap code -----
+
+
+    # Listing all snaps can be expensive due to multiple snaps in multiple
+    # incarnations. So, don't list all snaps unnecessarily, use this instead.
+    def has_snap(self, snap_name=None, uuid=None):
+        if snap_name and uuid:
+            path = self.get_incar_snap_path(uuid, snap_name)
+            return self.path_exists(path)
+        elif snap_name and not uuid:
+            uuid = self.get_incar_for_snap_name(snap_name)
+            path = self.get_incar_snap_path(uuid, snap_name)
+            return self.path_exists(path)
+        elif not snap_name and uuid:
+            path = self.get_incar_snap_base_path(uuid)
+            return not self.dir_is_empty(path)
+        elif not snap_name and not uuid:
+            for uuid in self.get_v3_incars():
+                path = self.get_incar_snap_base_path(uuid)
+                return not self.dir_is_empty(path)
+        else:
+            # shouldn't have reached here
+            assert False
+
+        return False
+
+    def get_incar_for_snap_name(self, snap_name):
+        for uuid in self.get_v3_incars():
+            path = self.get_incar_snap_base_path(uuid)
+            if snap_name in self.list_dirs(path):
+                return uuid
+
+        return None
+
+
+    # ----- methods for snaps -----
+
+
+    def create_snapshot(self, snap_name):
+        snap_name = to_utf8(snap_name)
+
+        if self.has_snap(snap_name):
+            raise VolumeException(EEXIST, f'snap "{snap_name}" already exists')
+
+        SubvolumeV2.create_snapshot(snap_name)
+
+    def remove_snapshot(self, snap_name, force):
+        snap_name = to_utf8(snap_name)
+
+        # UUID can be none if snap is absent but don't raise any exception in
+        # this case since command's behaviour is expected to be idempotent.
+        if not (snap_path := self.get_snap_path(snap_name)):
+            raise VolumeException(ENOENT, f'snap "{snap_name}" does not exist')
+
+        vol_exc = VolumeException(ESTALE, 'release lock and queue async purge '
+                                          'job')
+        SubvolumeV2.remove_snapshot(snap_name, force, snap_path)
+        if self.retained:
+            if not self.has_snap():
+                self.trash_base_dir()
+                raise vol_exc
+        else:
+            uuid = basename(dirname(dirname(snap_path)))
+            self.trash_uuid_dir(uuid)
+            raise vol_exc
         return False
