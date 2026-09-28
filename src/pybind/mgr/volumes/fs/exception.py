@@ -60,8 +60,24 @@ class InvalidUuidError(VolumeException):
     pass
 
 
+class V2UpgradeError(VolumeException):
+    '''
+    Subvol auto-upgrade from v2 to v3.
+    '''
+
+    def __init__(self, exception=None):
+        super().__init__(exception=exception)
+        self.errmsg = f'Error upgrading subvol from v2 to v3: {self.errmsg}'
+
+
 class EvictionError(VolumeException):
     pass
+
+    def get_all_xattrs(self, path):
+        return get_all_xattrs(self.fs, path)
+
+    def set_all_xattrs(self, path, xattrs):
+        return set_all_xattrs(self.fs, path, xattrs)
 
 
 class NotImplementedException(Exception):
