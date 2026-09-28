@@ -194,9 +194,10 @@ class SubvolumeV3(SubvolumeV2):
         uuid = uuid if uuid else self.uuid
         return safe_join(self.get_incar_path(uuid), 'mnt')
 
-    def get_incar_unlinked_path(self, uuid=None):
+    # deact = deactivated
+    def get_incar_deact_path(self, uuid=None):
         uuid = uuid if uuid else self.uuid
-        return safe_join(self.get_incar_path(uuid), '.unlinked')
+        return safe_join(self.get_incar_path(uuid), '.deactivated')
 
     def get_incar_snap_base_path(self, uuid=None):
         uuid = uuid if uuid else self.uuid
@@ -360,15 +361,43 @@ class SubvolumeV3(SubvolumeV2):
         if not (snap_path := self.get_snap_path(snap_name)):
             raise VolumeException(ENOENT, f'snap "{snap_name}" does not exist')
 
-        vol_exc = VolumeException(ESTALE, 'release lock and queue async purge '
-                                          'job')
         SubvolumeV2.remove_snapshot(snap_name, force, snap_path)
         if self.retained:
             if not self.has_snap():
                 self.trash_base_dir()
-                raise vol_exc
+                raise VolumeException(ESTALE, 'release lock and queue async '
+                                              'purge job')
         else:
             uuid = basename(dirname(dirname(snap_path)))
             self.trash_uuid_dir(uuid)
-            raise vol_exc
+            raise VolumeException(ESTALE, 'release lock and queue async '
+                                          'purge job')
         return False
+
+
+    # ----- methods for subvol removal while retaining snaps -----
+
+
+    def deact_curr_incar(self):
+        self.fs.rename(self.get_incar_mnt_path(), self.get_incar_deac_path())
+
+    def update_meta_file_after_retain(self):
+        self.md.remove_section(self.md.USER_METADATA_SECTION)
+
+        self.md.update_global_section('key', self.get_incar_deact_path())
+        self.md.update_global_section('state',
+                                      SubvolumeStates.STATE_RETAINED.value)
+
+        self.md.flush()
+
+    def remove_but_retain_snaps(self):
+        assert self.state != SubvolumeStates.STATE_RETAINED
+
+        try:
+            self.update_meta_file_after_retain()
+            self.deact_curr_incar()
+            self.auth_md.delete_subvolume_metadata_file(self.group.name,
+                                                        self.name)
+        except MetadataMgrException as e:
+            log.error(f"failed to write config: {e}")
+            raise VolumeException(e)
