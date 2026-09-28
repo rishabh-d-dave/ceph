@@ -438,7 +438,7 @@ def cstr(val, name, encoding="utf-8", opt=False) -> bytes:
         try:
             v = val.encode(encoding)
         except:
-            raise TypeError('%s must be encodeable as a bytearray' % name)
+            raise TypeError(f'"{name}" must be encodeable as a bytearray')
         assert isinstance(v, bytes)
         return v
 
@@ -2513,7 +2513,7 @@ cdef class LibCephFS(object):
         if ret < 0:
             raise make_ex(ret, "error in link")    
     
-    def readlink(self, path, size) -> bytes:
+    def readlink(self, path, size=4096) -> bytes:
         """
         Read a symbolic link.
       

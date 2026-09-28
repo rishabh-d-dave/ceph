@@ -19,8 +19,8 @@ class VolumeException(Exception):
 
         self.exception = exception
         if self.exception:
-            self.errno = self.exception.errno
-            self.errmsg = self.exception.strerror
+            self.errno = self.exception.args[0]
+            self.errmsg = self.exception.args[1]
 
         if self.errno:
             self.errcode = errorcode.get(abs(self.errno), 'UNKNOWN_ERROR')
@@ -57,6 +57,16 @@ class OpSmException(VolumeException):
 
 class InvalidUuidError(VolumeException):
     pass
+
+
+class V2UpgradeError(VolumeException):
+    '''
+    Subvol auto-upgrade from v2 to v3.
+    '''
+
+    def __init__(self, errno=None, errmsg=None, exception=None):
+        super().__init__(errno, errmsg, exception)
+        self.errmsg = f'Error upgrading subvol from v2 to v3: {self.errmsg}'
 
 
 class EvictionError(VolumeException):
