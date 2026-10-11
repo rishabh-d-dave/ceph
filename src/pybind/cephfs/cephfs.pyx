@@ -465,7 +465,7 @@ cdef class SnapDiffHandle2(object):
 
 
 def encode(*args, **kwargs) -> bytes:
-    encoding = kwargs.pop(encoding, 'utf-8')
+    encoding = kwargs.pop('encoding', 'utf-8')
 
     newargs = []
     for var in args:
@@ -477,9 +477,7 @@ def encode(*args, **kwargs) -> bytes:
         elif var_type in (int, float, bool):
             newargs.append(str(var).encode('utf-8'))
         else:
-            raise VolumeException(EINVAL,
-                                  f'invalid type. {var_type} = {var_type}, '
-                                  f'var = {var}, args = {args}')
+            raise TypeError(f'var = {var}, var_type = {var_type},args = {args}')
 
     return newargs if len(newargs) > 1 else newargs[0]
 
@@ -500,9 +498,9 @@ def cstr(val, name, encoding="utf-8", opt=False) -> bytes:
         return val
 
     val = encode(val, encoding=encoding)
-    assert isinstance(v, bytes), \
-        f'v = {v}, type(v) = {type(v)}'
-    return v
+    assert isinstance(val, bytes), \
+        f'v = {val}, type(v) = {type(val)}'
+    return val
 
 def cstr_list(list_str, name, encoding="utf-8"):
     return [cstr(s, name) for s in list_str]

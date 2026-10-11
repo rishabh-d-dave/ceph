@@ -18,13 +18,13 @@ class VolSpec(object):
     # internal directories
     INTERNAL_DIRS = [Group.NO_GROUP_NAME, Index.GROUP_NAME, Trash.GROUP_NAME, SubvolumeBase.LEGACY_CONF_DIR]
 
-    def __init__(self, snap_base_dir, subvol_base_path=None, pool_ns_prefix=None):
+    def __init__(self, snap_base_dir, vol_base_path=None, pool_ns_prefix=None):
         self.snap_base_dir = snap_base_dir
 
-        self.subvol_base_path = subvol_base_path
-        if not self.subvol_base_path:
-            self.subvol_base_path = self.DEFAULT_SUBVOL_PREFIX
-        assert self.subvol_base_path[0] == '/'
+        self.vol_base_path = vol_base_path
+        if not self.vol_base_path:
+            self.vol_base_path = self.DEFAULT_SUBVOL_PREFIX
+        assert self.vol_base_path[0] == '/'
 
         self.pool_ns_prefix = pool_ns_prefix if pool_ns_prefix else VolSpec.DEFAULT_NS_PREFIX
 
@@ -40,7 +40,7 @@ class VolSpec(object):
         """
         Return the top level directory under which subvolumes/groups are created
         """
-        return self.subvol_base_path
+        return self.vol_base_path
 
     @property
     def fs_namespace(self):

@@ -1,7 +1,6 @@
 from errno import *
 from os.path import basename, dirname
 from logging import getLogger
-from typing import Final
 
 from cephfs import Error, InvalidValue, ObjectNotFound
 
@@ -135,29 +134,65 @@ class V2Helper(SubvolHelper, PreV3Helper):
     For helping SubvoolV3 with its v2 incarnation
     '''
 
-    def __init__(self, fs=None, spec=None, base_path=None):
+    def __init__(self, fs, spec, base_path):
         self.fs = fs
         self.spec = spec
-        self.base_path = base_path
+        self._base_path = base_path
+        self.reset_attrs()
 
-        self.uuid: Final = self.fetch_uuid()
-        if self.uuid is None:
-            self.meta_path: Final = None
-            self.uuid_path: Final = None
-            self.snap_base_path: Final = None
+    def reset_attrs(self):
+        self._uuid = None
+        self._base_path = None
+        self._meta_path = None
+        self._uuid_path = None
+        self._snap_base_path = None
+
+    @property
+    def uuid(self):
+        if not self._uuid:
+            self._uuid = self.fetch_uuid()
+        return self._uuid
+
+    @property
+    def base_path(self):
+        if not self.uuid:
             return
 
-        verify_uuid(self.uuid)
-        self.meta_path: Final = safe_join(self.base_path, '.meta')
-        self.uuid_path: Final = safe_join(self.base_path, self.uuid)
-        self.snap_base_path: Final = safe_join(self.uuid_path, self.spec.snap_base_dir)
+        return self._base_path
+
+    @property
+    def meta_path(self):
+        if not self.uuid:
+            return
+
+        if not self._meta_path:
+            self._meta_path = safe_join(self.base_path, '.meta')
+        return self._meta_path
+
+    @property
+    def uuid_path(self):
+        if not self.uuid:
+            return
+
+        if not self._uuid_path:
+            self._uuid_path = safe_join(self.base_path, self.uuid)
+        return self._uuid_path
+
+    @property
+    def snap_base_path(self):
+        if not self.uuid:
+            return
+
+        if not self._snap_base_path:
+            self._snap_base_path = safe_join(self.uuid_path, self.spec.snap_base_dir)
+        return self._snap_base_path
 
     def fetch_uuid(self):
         # v2 incar will not exist if (v3) subvol is being created
-        if not self.path_exists(self.base_path):
+        if not self.path_exists(self._base_path):
             return
 
-        dentries = self.list_dirs(self.base_path)
+        dentries = self.list_dirs(self._base_path)
         if to_utf8('roots') in dentries:
             dentries.remove(to_utf8('roots'))
 
@@ -219,14 +254,7 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
                                         ^ self.v2.snap_base_path
     '''
 
-    @staticmethod
-    def version():
-        # this way the chance of accidentally modifying the version number is
-        # literally zero.
-        return 3
-
-
-    # ----- init and its helpers methods -----
+    VERSION = 3
 
 
     def __init__(self, mgr, fs, spec, group, name, uuid=None,
@@ -240,84 +268,131 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
         self.uuid = uuid
         if self.uuid:
             verify_uuid(self.uuid)
+        self._reset_basic_attrs()
 
-        self.has_incar = True
 
         # TODO: check if we can do without self.creating without too much
         # hassle?
-        self.creating = (disc_version is None)
+        self.creating = False
 
+        # creating
         if disc_version is None:
-            pass
-        elif disc_version == self.version():
+            self.creating = True
+        # opening
+        elif disc_version == self.VERSION:
             assert self.uuid
-            self._init_basic_paths()
-            self._init_md_attrs()
-            self._init_v2_helper()
-        elif disc_version < self.version():
+        # (auto-)upgrading
+        elif disc_version < self.VERSION:
             self._auto_upgrade(disc_version)
         else:
             msg = f'disc_version = {disc_version}'
             log.error(msg)
             assert False, msg
 
-    def _init_basic_paths(self):
-        self.base_path: Final = safe_join(self.spec.subvol_base_path,
-                                          self.group.name, self.name)
+    def _reset_basic_attrs(self):
+        self._reset_basic_paths()
+        self._reset_md_attrs()
+        self._reset_v2_helper()
 
-        self.meta_symlink_path: Final = safe_join(self.base_path, '.meta')
-        self.roots_path: Final = safe_join(self.base_path, 'roots')
+    def _reset_basic_paths(self):
+        self._base_path = None
+        self._roots_path = None
+        self._meta_symlink_path = None
 
-        self.meta_file_name: Final = to_utf8(f'.meta.{to_str(self.uuid)}')
-        self.meta_path: Final = safe_join(self.base_path, self.meta_file_name)
+        self._meta_file_name = None
+        self._meta_path = None
 
-    def _init_md_attrs(self):
-        log.debug(f'for subvol {self.name} loading meta {self.meta_path}')
-        self.md = MetadataManager(self.fs, self.meta_path, 0o640)
-        log.debug(f'meta of subvol {self.name}, self.md = {self.md}')
-        self.auth_md = AuthMetadataManager(self.fs)
+    def _reset_md_attrs(self):
+        self._md = None
+        self._auth_md = None
 
-
-        if not self.creating:
-            # can be removed?
-            self.md.refresh()
-
-    def _init_v2_helper(self):
-        self.v2 = V2Helper(self.fs, self.spec, self.base_path)
+    def _reset_v2_helper(self):
+        self._v2 = None
 
 
     # ----- basic helper methods for v3 incars -----
 
 
+    @property
+    def base_path(self):
+        if not self._base_path:
+            self._base_path = safe_join(self.spec.vol_base_path,
+                                        self.group.name, self.name)
+        return self._base_path
+
+    @property
+    def roots_path(self):
+        if not self._roots_path:
+            self._roots_path = safe_join(self.base_path, 'roots')
+        return self._roots_path
+
+    @property
+    def meta_symlink_path(self):
+        if not self._meta_symlink_path:
+            self._meta_symlink_path = safe_join(self.base_path, '.meta')
+        return self._meta_symlink_path
+
+    @property
+    def meta_file_name(self):
+        if not self._meta_file_name:
+            self._meta_file_name = to_utf8(f'.meta.{to_str(self.uuid)}')
+        return self._meta_file_name
+
+    @property
+    def meta_path(self):
+        if not self._meta_path:
+            self._meta_path = safe_join(self.base_path, self.meta_file_name)
+        return self._meta_path
+
+    @property
+    def md(self):
+        if not self._md:
+            log.debug(f'for subvol {self.name} loading meta {self.meta_path}')
+            self._md = MetadataManager(self.fs, self.meta_path, 0o640)
+        return self._md
+
+    @property
+    def auth_md(self):
+        if not self._auth_md:
+            log.debug(f'meta of subvol {self.name}, self.md = {self.md}')
+            self._auth_md = AuthMetadataManager(self.fs)
+        return self._auth_md
+
+    @property
+    def v2(self):
+        if not self._v2:
+            self._v2 = V2Helper(self.fs, self.spec, self.base_path)
+        return self._v2
+
     # incar = incarnation
     def get_incar_path(self, uuid=None):
-        if self.v2.UUID and self.v2.UUID == uuid:
+        if self.v2.uuid and self.v2.uuid == uuid:
             return self.v2.uuid_path
 
         uuid = uuid if uuid else self.uuid
         return safe_join(self.roots_path, uuid)
 
     def get_incar_mnt_path(self, uuid=None):
-        if self.v2.UUID and self.v2.UUID == uuid:
+        if self.v2.uuid and self.v2.uuid == uuid:
             assert False, 'v2 incar can\'t have mnt dir/path'
 
         return safe_join(self.get_incar_path(uuid), 'mnt')
 
     # deact = deactivated
     def get_incar_deact_path(self, uuid=None):
-        if self.v2.UUID and self.v2.UUID == uuid:
+        if self.v2.uuid and self.v2.uuid == uuid:
             assert False, 'v2 incar can\'t have deactivate dir/path'
 
         return safe_join(self.get_incar_path(uuid), '.deactivated')
 
     def get_incar_snap_base_path(self, uuid=None):
-        if self.v2.UUID and self.v2.UUID == uuid:
+        if self.v2.uuid and self.v2.uuid == uuid:
             return self.v2.snap_base_path
 
         return safe_join(self.get_incar_path(uuid), self.spec.snap_base_dir)
 
     def get_incar_snap_path(self, snap_name, uuid=None):
-        if self.v2.UUID and self.v2.UUID == uuid:
+        if self.v2.uuid and self.v2.uuid == uuid:
             return self.v2.get_snap_path(snap_name)
 
         return safe_join(self.get_incar_snap_base_path(uuid), snap_name)
@@ -333,6 +408,7 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
         if self.creating:
             return False
         else:
+            # TODO: replace with super(SubvolumeV2, self).retained
             return SubvolumeV2.retained.fget(self)
 
     def _remove_on_failure(self, retained):
@@ -399,9 +475,7 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
         assert self.creating
         assert self.uuid is None
         self.uuid = gen_uuid()
-        self._init_basic_paths()
-        self._init_md_attrs()
-        self._init_v2_helper()
+        self._reset_basic_attrs()
 
         if not self.path_exists(self.group.path):
             self.fs.mkdirs(self.group.path, self.spec.DEFAULT_MODE)
@@ -411,7 +485,6 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
         self.set_attrs(self.get_incar_mnt_path(), attrs)
 
         self.create_or_update_meta_file(subvol_type)
-        self._init_md_attrs()
         if auth:
             # Create the subvolume metadata file which manages auth-ids if it
             # doesn't exist
@@ -422,10 +495,12 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
         create_trashcan(self.fs, self.spec)
 
         with open_trashcan(self.fs, self.spec) as trashcan:
-            if len(self.get_v3_incars()) > 1:
+            if len(self.get_v3_incars()) == 1:
                 trashcan.dump(self.get_incar_path())
             else:
-                trashcan.dump(self.base_path)
+                assert False, \
+                    'v3 base dir can\'t be deleted if it has >1 incars'
+            trashcan.dump(self.base_path)
 
     def trash_uuid_dir(self, uuid):
         create_trashcan(self.fs, self.spec)
@@ -452,7 +527,7 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
         if uuid:
             if uuid in self.get_v3_incars():
                 return self.get_v3_snap_names(uuid)
-            elif self.v2.UUID == uuid:
+            elif self.v2.uuid == uuid:
                 return self.v2.get_snap_names()
         else:
             snap_names = []
@@ -562,19 +637,19 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
             uuid = basename(dirname(dirname(snap_path)))
             if not self.v2.has_snap(uuid):
                 if self.has_v3_snap():
-                    self.trash_uuid_dir(uuid)
+                    if self.is_incar_deact(uuid):
+                        self.trash_uuid_dir(uuid)
                     self.md.remove_global_option('has_v2_snaps')
                     self.md.flush()
-                else:
-                    self.trash_base_dir(uuid)
-                self._init_v2_helper()
+                # reset v2 helper since v2 incar was deleted, next usage will
+                # automatically init to empty v2 object.
+                self._reset_v2_helper()
                 raise VolumeException(ESTALE, 'release lock and queue async '
                                               'purge job')
             elif not self.has_v3_snap(uuid):
                 if self.has_v3_snap():
-                    self.trash_uuid_dir(uuid)
-                else:
-                    self.trash_base_dir(uuid)
+                    if self.is_incar_deact(uuid):
+                        self.trash_uuid_dir(uuid)
                 raise VolumeException(ESTALE, 'release lock and queue async '
                                               'purge job')
         return False
@@ -582,6 +657,17 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
 
     # ----- methods for subvol removal while retaining snaps -----
 
+
+    def is_incar_deact(self, uuid):
+        subdirs = self.list_dirs(self.get_incar_path(uuid))
+        assert len(subdirs) == 1
+        subdir = to_str(subdirs[0])
+        if subdir == 'deactivated':
+            return True
+        elif subdir == 'mnt':
+            return False
+        else:
+            assert False
 
     def deact_curr_incar(self):
         self.fs.rename(self.get_incar_mnt_path(), self.get_incar_deac_path())
@@ -631,7 +717,13 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
         # renamed to mnt path. setting it after renaming v2 UUID path to mnt
         # path create a minute period between them during which MDS will reject
         # client requests, causing client IO interruption.
-        self.fs.setxattr(prev_path, 'ceph.dir.subvolume.prevpath', prev_path)
+        for i in range(100):
+            try:
+                self.fs.setxattr(prev_path, 'ceph.dir.subvolume.prevpath', prev_path)
+            except ObjectNotFound:
+                sleep(60)
+            else:
+                return
 
 
     # ----- methods for subvol auto-upgrade from v2 -----
@@ -674,7 +766,7 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
         try:
             self.md.refresh()
 
-            self.md.update_global_section('version', self.version())
+            self.md.update_global_section('version', self.VERSION)
             self.md.update_global_section('path', self.get_incar_mnt_path())
             if self.v2.has_snap():
                 self.md.update_global_section('has_v2_snaps', True)
@@ -688,22 +780,20 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
     def _upgrade_from_v2(self):
         log.info(f'initiating v2 to v3 auto-upgrade for subvol {self.name}')
 
-        self._init_basic_paths()
-        self._init_v2_helper()
-        assert self.v2.UUID
+        assert self.v2.uuid
 
         self.set_prev_path(self.v2.uuid_path)
         if self.v2.has_snap():
             self.uuid = gen_uuid()
-            self._init_basic_paths()
+            self._reset_basic_paths()
 
         self._upgrade_v2_to_v3_layout()
-        self._init_md_attrs()
+        self._reset_md_attrs()
         self._update_v2_to_v3_meta()
 
         # re-define v2 helper if v2 incar is moved.
-        if self.uuid == self.v2.UUID:
-            self._init_v2_helper()
+        if self.uuid == self.v2.uuid:
+            self._reset_v2_helper()
         self.clean_stale_snapshot_metadata()
 
         log.info(f'v2 to v3 auto-upgrade for subvol {self.name} was successful')

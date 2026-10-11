@@ -58,10 +58,6 @@ class SubvolumeV1(SubvolumeBase, SubvolumeTemplate, V3Compat):
     """
     VERSION = 1
 
-    @staticmethod
-    def version():
-        return SubvolumeV1.VERSION
-
     @property
     def path(self):
         try:

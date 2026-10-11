@@ -43,10 +43,6 @@ class SubvolumeV2(SubvolumeV1):
         self.uuid = None
         self.has_incar = True
 
-    @staticmethod
-    def version():
-        return SubvolumeV2.VERSION
-
     @property
     def features(self):
         return [SubvolumeFeatures.FEATURE_SNAPSHOT_CLONE.value,
@@ -177,7 +173,7 @@ class SubvolumeV2(SubvolumeV1):
                                            initial_state)
             self.metadata_mgr.flush()
         else:
-            self.init_config(self.version(), subvol_type, subvol_data_path,
+            self.init_config(self.VERSION, subvol_type, subvol_data_path,
                              initial_state)
 
     def _create(self, mode, attrs, subvol_type, auth=True):

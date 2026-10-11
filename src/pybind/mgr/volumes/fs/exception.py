@@ -73,12 +73,6 @@ class V2UpgradeError(VolumeException):
 class EvictionError(VolumeException):
     pass
 
-    def get_all_xattrs(self, path):
-        return get_all_xattrs(self.fs, path)
-
-    def set_all_xattrs(self, path, xattrs):
-        return set_all_xattrs(self.fs, path, xattrs)
-
 
 class NotImplementedException(Exception):
     pass
