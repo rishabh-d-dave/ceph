@@ -845,7 +845,7 @@ class SubvolV3Helper(SubvolBase):
 
     def gen_v1_snap_data_path(self, snap_name):
             assert False, \
-                f'in v1, snap_data_path is same as snap path'
+                'in v1, snap_data_path is same as snap path'
 
     def fetch_uuid(self):
         meta_file_name = self.mount.get_shell_stdout(
@@ -982,7 +982,7 @@ class SubvolV3Helper(SubvolBase):
                            f'"{snap_name}"')
 
     def verify_meta_file_for_v1(self, meta_content):
-        v1_lines = ['[PRE_V3_INCAR]', f'pre_v3_version = v1',
+        v1_lines = ['[PRE_V3_INCAR]', 'pre_v3_version = v1',
                     f'pre_v3_uuid = {self.v1_uuid}',
                     f'pre_v3_path = {self.gen_prev_path(self.v1_uuid)}']
 
