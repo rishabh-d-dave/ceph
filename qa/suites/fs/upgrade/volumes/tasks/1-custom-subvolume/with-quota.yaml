@@ -1,0 +1,9 @@
+overrides:
+  ceph:
+    subvols:
+      version: 2
+      create_num: 1
+      create_options: "--size 25000000000"
+  ceph-fuse:
+    client.0:
+      mount_subvol_num: 0
