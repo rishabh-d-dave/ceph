@@ -171,11 +171,14 @@ class V1V2Base(SubvolHelper, PreV3Helper):
 
         self.fs = fs
         self.spec = spec
-        self._base_path = base_path
+        self.base_path: Final = base_path
         self.md = md
 
         self.upgrading = False
 
+        self.v3_incar_base_path = safe_join(self.base_path, INCAR_BASE_DIR)
+        self.empty = None
+        self._uuid = None
         self._meta_path = None
         self._uuid_path = None
         self._snap_base_path = None
@@ -277,14 +280,11 @@ class V1Incar(V1V2Base):
         if creating_v3:
             self.empty = True
         else:
-            self.empty = True if self.md.get_pre_v3_uuid(None) else False
-
-        if not self.empty:
-            self.v3_incar_base_path = safe_join(self.base_path, INCAR_BASE_DIR)
-            if self.is_upgraded() or self.empty:
-                self._uuid = None
+            if uuid := self.fetch_uuid():
+                self.empty = False
+                self._uuid = uuid
             else:
-                self.fetch_uuid()
+                self.empty = True
 
     def mark_upgraded(self):
         super().mark_upgraded()
@@ -293,7 +293,7 @@ class V1Incar(V1V2Base):
 
     def fetch_snap_base_path(self):
         if self.empty:
-            return None
+            return
 
         if self.is_upgraded():
             return safe_join(self.base_path, INCAR_BASE_DIR, self.uuid, MNT_DIR,
@@ -337,7 +337,7 @@ class V2Incar(V1V2Base):
     '''
     For helping SubvolV3 with its v2 incarnation and v2 subvol layout during
     subvol auto-upgrade.
-     '''
+    '''
 
     def __init__(self, fs, spec, base_path, md, creating_v3):
         super().__init__(fs, spec, base_path, md)
@@ -345,14 +345,11 @@ class V2Incar(V1V2Base):
         if creating_v3:
             self.empty = True
         else:
-            self.empty = True if self.md.get_pre_v3_uuid(None) else False
-
-        if not self.empty:
-            self.v3_incar_base_path = safe_join(self.base_path, INCAR_BASE_DIR)
-            if self.is_upgraded() or self.empty:
-                self._uuid = None
+            if uuid := self.fetch_uuid():
+                self.empty = False
+                self._uuid = uuid
             else:
-                self.fetch_uuid()
+                self.empty = True
 
     def get_snap_base_path(self):
         if self.empty:
