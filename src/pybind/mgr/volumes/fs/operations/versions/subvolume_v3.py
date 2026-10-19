@@ -327,7 +327,6 @@ class V1Incar(V1V2Base):
         return (INCAR_BASE_DIR == basename(path))
 
 
-
 class V2Incar(V1V2Base):
     '''
     For helping SubvolV3 with its v2 incarnation and v2 subvol layout during
@@ -1086,7 +1085,7 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
     # ----- methods for subvol auto-upgrade from v1 -----
 
 
-    def _update_v1_to_v3_meta(self):
+    def _update_meta_file_with_v1_details(self):
         log.info(f'subvol {self.name}: updating meta file as part of v1 to v3'
                  'auto-upgrade...')
 
@@ -1147,7 +1146,7 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
 
         self._upgrade_v1_to_v3_layout()
         self._reset_md_attrs()
-        self._update_v1_to_v3_meta()
+        self._update_meta_file_with_v1_details()
 
         assert self.uuid == self.v1.uuid
         self.clean_stale_snapshot_metadata()
