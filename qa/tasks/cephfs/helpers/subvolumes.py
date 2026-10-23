@@ -56,7 +56,7 @@ class SubvolOps(RunCephCmd):
     # ----- helpers for subvol ops -----
 
 
-    def create_subvol(self, volname, subvol_name, grp_name=None, opts=None):
+    def create(self, volname, subvol_name, grp_name=None, opts=''):
         cmd = f'fs subvolume create {volname} {subvol_name}'
         if grp_name:
             cmd += f' --group-name {grp_name}'
@@ -65,28 +65,30 @@ class SubvolOps(RunCephCmd):
 
         return self.run_ceph_cmd(cmd)
 
-    def rm_subvol(self, volname, subvol_name, grp_name=None):
+    def rm(self, volname, subvol_name, grp_name=None, opts=''):
         cmd = f'fs subvolume rm {volname} {subvol_name}'
         if grp_name:
             cmd += f' --group-name {grp_name}'
+        if opts:
+            cmd += f' {opts}'
 
         return self.run_ceph_cmd(cmd)
 
-    def get_subvol_path(self, volname, subvol_name, grp_name=None):
+    def getpath(self, volname, subvol_name, grp_name=None):
         cmd = f'fs subvolume getpath {volname} {subvol_name}'
         if grp_name:
             cmd += f' --group-name {grp_name}'
 
         return self.get_ceph_cmd_stdout(cmd).strip()
 
-    def ls_subvol(self, volname, grp_name=None):
+    def ls(self, volname, grp_name=None):
         cmd = f'fs subvolume ls {volname}'
         if grp_name:
             cmd += f' --group-name {grp_name}'
 
         return loads(self.get_ceph_cmd_stdout(cmd))
 
-    def auth_subvol(self, volname, subvol_name, client_id, grp_name=None):
+    def auth(self, volname, subvol_name, client_id, grp_name=None):
         cmd = f'fs subvolume authorize {volname} {subvol_name} {client_id}'
         if grp_name:
             cmd += f' --group-name {grp_name}'
@@ -97,22 +99,24 @@ class SubvolOps(RunCephCmd):
     # ----- helpers for subvol snap ops -----
 
 
-    def create_snap(self, volname, subvol_name, snap_name, grp_name=None):
+    def snap_create(self, volname, subvol_name, snap_name=None, grp_name=None):
+        snap_name = snap_name if snap_name else gen_subvol_snap_name()
         cmd = (f'fs subvolume snapshot create {volname} {subvol_name} '
                f'{snap_name}')
         if grp_name:
             cmd += f' --group-name {grp_name}'
 
-        return self.run_ceph_cmd(cmd)
+        self.run_ceph_cmd(cmd)
+        return snap_name
 
-    def rm_snap(self, volname, subvol_name, snap_name, grp_name=None):
+    def snap_rm(self, volname, subvol_name, snap_name, grp_name=None):
         cmd = f'fs subvolume snapshot rm {volname} {subvol_name} {snap_name}'
         if grp_name:
             cmd += f' --group-name {grp_name}'
 
         return self.run_ceph_cmd(cmd)
 
-    def get_snap_path(self, volname, subvol_name, snap_name, grp_name=None):
+    def snap_getpath(self, volname, subvol_name, snap_name, grp_name=None):
         cmd = (f'fs subvolume snapshot getpath {volname} {subvol_name} '
                f'{snap_name}')
         if grp_name:
@@ -120,7 +124,7 @@ class SubvolOps(RunCephCmd):
 
         return self.get_ceph_cmd_stdout(cmd).strip()
 
-    def ls_snap(self, volname, subvol_name, grp_name=None):
+    def snap_ls(self, volname, subvol_name, grp_name=None):
         cmd = f'fs subvolume snapshot ls {volname} {subvol_name}'
         if grp_name:
             cmd += f' --group-name {grp_name}'
@@ -151,6 +155,7 @@ class SubvolBase(SubvolOps):
         self.volname = volname
         self.grp_name = gen_subvol_grp_name() if grp_name is True else grp_name
         self.name = name if name else gen_subvol_name()
+        self.uuid = uuid if uuid else str(uuid4())
         self.snaps = snaps
         self.retained = retained
         self.create_opts = create_opts
@@ -207,41 +212,44 @@ class SubvolBase(SubvolOps):
     # ----- helpers for subvol ops -----
 
 
-    def create(self, opts=None):
-        self.create_subvol(self.volname, self.name, self.grp_name,
-                           self.create_opts)
+    def create(self, opts=''):
+        if self.create_opts:
+            opts = opts + ' ' + self.create_opts
+            if 'mode' not in opts:
+                opts = opts + ' ' + ' --mode=755'
+        super().create(self.volname, self.name, self.grp_name, opts)
 
-    def rm(self):
-        self.rm_subvol(self.volname, self.name, self.grp_name)
+    def rm(self, opts=''):
+        super().rm(self.volname, self.name, self.grp_name, opts)
 
     def getpath(self):
-        return self.get_subvol_path(self.volname, self.name, self.grp_name).\
+        return super().getpath(self.volname, self.name, self.grp_name).\
                 strip()
 
     def ls(self):
-        return self.ls_subvol(self.volname, self.grp_name)
+        return super().ls(self.volname, self.grp_name)
 
     def auth(self, client_id):
-        self.auth_subvol(self.volname, self.name, client_id, self.grp_name)
+        self.auth(self.volname, self.name, client_id, self.grp_name)
 
 
     # ----- helpers for subvol snap ops -----
 
 
-    def create_snap(self, snap_name):
-        return super().create_snap(self.volname, self.name, snap_name,
+    def snap_create(self, snap_name=None):
+        return super().snap_create(self.volname, self.name, snap_name,
                                    self.grp_name)
 
-    def rm_snap(self, snap_name):
-        return super().rm_snap(self.volname, self.name, snap_name,
+    def snap_rm(self, snap_name):
+        return super().snap_rm(self.volname, self.name, snap_name,
                                self.grp_name)
 
-    def get_snap_path(self, snap_name):
-        return super().get_snap_path(self.volnmae, self.name, snap_name,
+    def snap_getpath(self, snap_name):
+        return super().snap_getpath(self.volnmae, self.name, snap_name,
                                      self.grp_name).strip()
 
-    def ls_snap(self):
-        return super().ls_snap(self.volname, self.name, self.grp_name)
+    def snap_ls(self):
+        return super().snap_ls(self.volname, self.name, self.grp_name)
 
 
     # ----- helpers for custom create -----
@@ -281,7 +289,7 @@ class SubvolBase(SubvolOps):
     # XXX: do _not_ open subvol using volumes plugin as it will trigger
     # auto-upgrade for the subvol.
     def sanity_test_custom_made_snap(self, snap_name):
-        snap_path = self.get_snap_path(snap_name)
+        snap_path = self.snap_getpath(snap_name)
         self.mount.run_shell(f'stat {snap_path[1:]}')
 
     def sanity_test_subvol_ls(self):
@@ -293,12 +301,12 @@ class SubvolBase(SubvolOps):
         assert sv_path == self.mnt_path
 
     def sanity_test_snap_ls(self, snap_name):
-        ls_output = self.ls_snap()
+        ls_output = self.snap_ls()
         assert ls_output[0]['name'] == snap_name
 
     def sanity_test_snap_getpath(self, snap_name):
-        exp_snap_path = self.get_snap_path(snap_name)
-        getpath = self.get_snap_path(snap_name)
+        exp_snap_path = self.snap_getpath(snap_name)
+        getpath = self.snap_getpath(snap_name)
         assert getpath == exp_snap_path
 
 
@@ -361,7 +369,7 @@ class V1V2Base(SubvolBase):
     def get_snap_base_path(self):
         raise NotImplementedError('derived class should override this method')
 
-    def get_snap_path(self, snap_name):
+    def snap_getpath(self, snap_name):
         return join(self.get_snap_base_path(), snap_name)
 
 
@@ -370,7 +378,7 @@ class V1V2Base(SubvolBase):
     def custom_create(self):
         raise NotImplementedError('derived class should override this method')
 
-    def custom_create_snap(self):
+    def custom_snap_create(self):
         raise NotImplementedError('derived class should override this method')
 
 
@@ -409,7 +417,7 @@ class SubvolV1(V1V2Base):
             path = f'{self.mnt_path[1:]}/file-{i}'
             self.mount.run_shell(f'dd if=/dev/zero of={path} bs=1M count=1')
 
-    def custom_create_snap(self, snap_name=None):
+    def custom_snap_create(self, snap_name=None):
         '''
         For testing subvol auto-upgrade, create v1 snap subvol without using
         'subvolume snapshot create' command.
@@ -420,7 +428,7 @@ class SubvolV1(V1V2Base):
         cephfs.mksnap('{self.get_snap_base_path()}', '{snap_name}', 0o755)
         """))
 
-        snap_path = self.get_snap_path(snap_name)
+        snap_path = self.snap_getpath(snap_name)
         # verify that snap was created
         self.mount.run_shell(f'stat {snap_path[1:]}')
 
@@ -474,7 +482,7 @@ class SubvolV2(V1V2Base):
         cephfs.mksnap('{self.get_snap_base_path()}', '{snap_name}', 0o755)
         """))
 
-        snap_path = self.get_snap_path(snap_name)
+        snap_path = self.snap_getpath(snap_name)
         # verify that snap was created
         self.mount.run_shell(f'stat {snap_path[1:]}')
 
@@ -508,15 +516,19 @@ class SubvolV3(SubvolBase):
                              volname=subvol.volname, name=subvol.name,
                              uuid=subvol.uuid, grp_name=subvol.grp_name,
                              snaps=subvol.snaps, retained=subvol.retained)
-            self.has_prev_version_snaps = True if subvol.snaps else False
-            self.uuid = self.fetch_uuid() if self.has_prev_version_snaps \
-                    else subvol.uuid
+
+            if type(subvol) is SubvolV2:
+                self.has_v2_snaps = (subvol.snaps != [])
+                self.has_v1_snaps = False
+            elif type(subvol) is SubvolV1:
+                self.has_v1_snaps = (subvol.snaps != [])
+                self.has_v2_snaps = False
         else:
             super().__init__(mon_manager, mount=mount, volname=volname, name=name,
                              uuid=uuid, grp_name=grp_name, snaps=snaps,
                              retained=retained)
-            self.has_prev_version_snaps = False
-            self.uuuid = str(uuid4())
+            self.has_v1_snaps = False
+            self.has_v2_snaps = False
 
         self._verify_attrs()
 
@@ -532,8 +544,10 @@ class SubvolV3(SubvolBase):
 
         assert type(self.uuid) is str, \
                 f'self.uuid = {self.uuid}'
-        assert type(self.has_prev_version_snaps) is bool, \
-                f'self.has_prev_version_snaps = {self.has_prev_version_snaps}'
+        assert type(self.has_v2_snaps) is bool, \
+                f'self.has_v2_snaps = {self.has_v2_snaps}'
+        assert type(self.has_v1_snaps) is bool, \
+                f'self.has_v1_snaps = {self.has_v1_snaps}'
 
 
     # ----- subvol helper -----
@@ -585,7 +599,7 @@ class SubvolV3(SubvolBase):
     def get_snap_base_path(self, uuid=None):
         return join(self.get_incar_path(uuid), '.snap')
 
-    def get_snap_path(self, snap_name, uuid=None):
+    def snap_getpath(self, snap_name, uuid=None):
         return join(self.get_snap_base_path(uuid), snap_name)
 
 
@@ -612,5 +626,7 @@ class SubvolV3(SubvolBase):
         assert f'state = complete' in meta_content
         assert f'type = subvolume' in meta_content
 
-        if self.has_prev_version_snaps:
-            assert 'has_prev_version_snaps = True' in meta_content
+        if self.has_v1_snaps:
+            assert 'has_v1_snaps = True' in meta_content
+        if self.has_v2_snaps:
+            assert 'has_v2_snaps = True' in meta_content

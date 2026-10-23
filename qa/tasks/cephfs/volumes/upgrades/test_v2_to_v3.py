@@ -83,7 +83,7 @@ class TestBasic(SubvolAutoUpgrade):
         v3.sanity_test_snap_ls(snap_name)
         v3.sanity_test_snap_getpath(snap_name)
 
-        v3.rm_snap(snap_name)
+        v3.snap_rm(snap_name)
         v3.rm()
         self.wait_till_trash_is_empty()
 
@@ -200,6 +200,6 @@ class TestWithIoLoad(SubvolAutoUpgrade):
         # verifying if files were actually being written on the subvol
         writer.verify_num_of_files_written()
 
-        v3.rm_snap(snap_name)
+        v3.snap_rm(snap_name)
         v3.rm()
         self.wait_till_trash_is_empty()

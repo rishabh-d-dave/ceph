@@ -63,7 +63,7 @@ class TestBasic(SubvolAutoUpgrade):
         v3.rm()
         self.wait_till_trash_is_empty()
 
-    def _test_subvol_with_v1_snap(self):
+    def test_subvol_with_v1_snap(self):
         '''
         Test subvol upgrade from v1 to v3 when it has a snap.
         '''
@@ -83,7 +83,7 @@ class TestBasic(SubvolAutoUpgrade):
         v3.sanity_test_snap_ls(snap_name)
         v3.sanity_test_snap_getpath(snap_name)
 
-        v3.rm_snap(snap_name)
+        v3.snap_rm(snap_name)
         v3.rm()
         self.wait_till_trash_is_empty()
 
@@ -161,7 +161,7 @@ class TestWithIoLoad(SubvolAutoUpgrade):
         v3.rm()
         self.wait_till_trash_is_empty()
 
-    def _test_with_subvol_client_with_snap(self):
+    def test_with_subvol_client_with_snap(self):
         '''
         Test subvol upgrade from v1 to v3 when subvol is located in the default
         subvol group, contains a snapshot and is under IO load via a client that
@@ -200,6 +200,6 @@ class TestWithIoLoad(SubvolAutoUpgrade):
         # verifying if files were actually being written on the subvol
         writer.verify_num_of_files_written()
 
-        v3.rm_snap(snap_name)
+        v3.snap_rm(snap_name)
         v3.rm()
         self.wait_till_trash_is_empty()

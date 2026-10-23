@@ -9,42 +9,39 @@ class VolSpec(object):
     specification of a "volume" -- base directory and various prefixes.
     """
 
-    # where shall we (by default) create subvolumes
-    DEFAULT_SUBVOL_PREFIX = "/volumes"
+    # default base path for subvolumes
+    _VOL_PATH = "/volumes"
     # and the default namespace
-    DEFAULT_NS_PREFIX = "fsvolumens_"
+    _NAMESPACE_PFX = "fsvolumens_"
     # default mode for subvol prefix and group
     DEFAULT_MODE = 0o755
     # internal directories
     INTERNAL_DIRS = [Group.NO_GROUP_NAME, Index.GROUP_NAME, Trash.GROUP_NAME, SubvolumeBase.LEGACY_CONF_DIR]
 
-    def __init__(self, snap_base_dir, vol_base_path=None, pool_ns_prefix=None):
-        self.snap_base_dir = snap_base_dir
+    def __init__(self, snap_base_dir, vol_base_path=None, pool_ns_pfx=None):
+        self.SNAP_BASE_DIR = snap_base_dir
+        self.VOL_BASE_PATH = vol_base_path if vol_base_path else self._VOL_PATH
+        self.POOL_NS_PFX = pool_ns_pfx if pool_ns_pfx else self._NAMESPACE_PFX
 
-        self.vol_base_path = vol_base_path
-        if not self.vol_base_path:
-            self.vol_base_path = self.DEFAULT_SUBVOL_PREFIX
-        assert self.vol_base_path[0] == '/'
-
-        self.pool_ns_prefix = pool_ns_prefix if pool_ns_prefix else VolSpec.DEFAULT_NS_PREFIX
+        assert self.VOL_BASE_PATH[0] == '/'
 
     @property
     def snapshot_dir_prefix(self):
         """
         Return the snapshot directory prefix
         """
-        return self.snap_base_dir
+        return self.SNAP_BASE_DIR
 
     @property
     def base_dir(self):
         """
         Return the top level directory under which subvolumes/groups are created
         """
-        return self.vol_base_path
+        return self.VOL_BASE_PATH
 
     @property
     def fs_namespace(self):
         """
         return a filesystem namespace by stashing pool namespace prefix and subvolume-id
         """
-        return self.pool_ns_prefix
+        return self.POOL_NS_PREFIX
