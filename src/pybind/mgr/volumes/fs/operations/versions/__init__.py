@@ -74,7 +74,7 @@ class SubvolumeLoader(object):
         subvolume_type = SubvolumeTypes.TYPE_NORMAL
         try:
             initial_state = SubvolumeOpSm.get_init_state(subvolume_type)
-        except OpSmExceptionas as e:
+        except OpSmException as e:
             raise VolumeException(-errno.EINVAL,
                                   "subvolume creation failed due to internal "
                                   f"error, exception: {e}")

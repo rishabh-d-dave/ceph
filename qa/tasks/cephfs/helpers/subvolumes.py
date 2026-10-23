@@ -151,6 +151,7 @@ class SubvolBase(SubvolOps):
         self.volname = volname
         self.grp_name = gen_subvol_grp_name() if grp_name is True else grp_name
         self.name = name if name else gen_subvol_name()
+        self.uuid = uuid if uuid else str(uuid4())
         self.snaps = snaps
         self.retained = retained
         self.create_opts = create_opts
@@ -508,15 +509,19 @@ class SubvolV3(SubvolBase):
                              volname=subvol.volname, name=subvol.name,
                              uuid=subvol.uuid, grp_name=subvol.grp_name,
                              snaps=subvol.snaps, retained=subvol.retained)
-            self.has_prev_version_snaps = True if subvol.snaps else False
-            self.uuid = self.fetch_uuid() if self.has_prev_version_snaps \
-                    else subvol.uuid
+
+            if type(subvol) is SubvolV2:
+                self.has_v2_snaps = (subvol.snaps != [])
+                self.has_v1_snaps = False
+            elif type(subvol) is SubvolV1:
+                self.has_v1_snaps = (subvol.snaps != [])
+                self.has_v2_snaps = False
         else:
             super().__init__(mon_manager, mount=mount, volname=volname, name=name,
                              uuid=uuid, grp_name=grp_name, snaps=snaps,
                              retained=retained)
-            self.has_prev_version_snaps = False
-            self.uuuid = str(uuid4())
+            self.has_v1_snaps = False
+            self.has_v2_snaps = False
 
         self._verify_attrs()
 
@@ -532,8 +537,10 @@ class SubvolV3(SubvolBase):
 
         assert type(self.uuid) is str, \
                 f'self.uuid = {self.uuid}'
-        assert type(self.has_prev_version_snaps) is bool, \
-                f'self.has_prev_version_snaps = {self.has_prev_version_snaps}'
+        assert type(self.has_v2_snaps) is bool, \
+                f'self.has_v2_snaps = {self.has_v2_snaps}'
+        assert type(self.has_v1_snaps) is bool, \
+                f'self.has_v1_snaps = {self.has_v1_snaps}'
 
 
     # ----- subvol helper -----
@@ -612,5 +619,7 @@ class SubvolV3(SubvolBase):
         assert f'state = complete' in meta_content
         assert f'type = subvolume' in meta_content
 
-        if self.has_prev_version_snaps:
-            assert 'has_prev_version_snaps = True' in meta_content
+        if self.has_v1_snaps:
+            assert 'has_v1_snaps = True' in meta_content
+        if self.has_v2_snaps:
+            assert 'has_v2_snaps = True' in meta_content
