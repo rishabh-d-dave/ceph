@@ -64,7 +64,7 @@ class GenIoLoad(RunCephCmd):
             from tasks.ceph_manager import CephManager
 
             first_mon = get_first_mon(self.mount.ctx, None)
-            admin_remote = self._ctx.cluster.only(first_mon).remotes.keys()[0]
+            admin_remote = self.mount.ctx.cluster.only(first_mon).remotes.keys()[0]
 
             self.mon_manager = CephManager(self.ceph_cluster.admin_remote,
                 ctx=self.ctx, logger=log.getChild('ceph_manager'))
