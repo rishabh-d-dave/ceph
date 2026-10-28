@@ -55,19 +55,21 @@ class GenIoLoad(RunCephCmd):
         self.writer_crashed = False
 
     def _init_mon_manager(self):
+        ctx = self.mount.ctx
+
         # if vstart_runner.py has invoked this code
-        if 'Local' in str(type(self.mount.ctx)):
+        if 'Local' in str(type(ctx)):
             from tasks.vstart_runner import LocalCephManager
-            self.mon_manager = LocalCephManager(ctx=self.mount.ctx)
+
+            self.mon_manager = ctx.managers['ceph']
         # else teuthology has invoked this code
         else:
             from tasks.ceph_manager import CephManager
 
-            first_mon = get_first_mon(self.mount.ctx, None)
-            admin_remote = self.mount.ctx.cluster.only(first_mon).remotes.keys()[0]
-
-            self.mon_manager = CephManager(self.ceph_cluster.admin_remote,
-                ctx=self.ctx, logger=log.getChild('ceph_manager'))
+            first_mon = get_first_mon(ctx, None)
+            admin_remote = tuple(ctx.cluster.only(first_mon).remotes.keys())[0]
+            self.mon_manager = CephManager(admin_remote, ctx=ctx,
+                                           logger=log.getChild('ceph_manager'))
 
     def _handle_thread_crash(self, args):
         self.writer_crashed = True
