@@ -262,12 +262,15 @@ class SubvolBase(SubvolOps):
 
 
     def snap_create(self, snap_name=None):
-        return super().snap_create(self.volname, self.name, snap_name,
-                                   self.grp_name)
+        super().snap_create(self.volname, self.name, snap_name,
+                            self.grp_name)
+        self.snaps.append(snap_name)
+        return snap_name
 
     def snap_rm(self, snap_name):
-        return super().snap_rm(self.volname, self.name, snap_name,
-                               self.grp_name)
+        super().snap_rm(self.volname, self.name, snap_name,
+                        self.grp_name)
+        self.snaps.remove(snap_name)
 
     def snap_getpath(self, snap_name):
         return super().snap_getpath(self.volname, self.name, snap_name,
@@ -692,6 +695,9 @@ class SubvolV3(SubvolBase):
         assert f'state = complete' in meta_content
         assert f'type = subvolume' in meta_content
 
+        log.info(f'self.snaps = {self.snaps}')
+        log.info(f'self.has_v1_snaps = {self.has_v1_snaps}')
+        log.info(f'self.has_v2_snaps = {self.has_v2_snaps}')
         if self.has_v1_snaps:
             assert 'has_v1_snaps = True' in meta_content
         if self.has_v2_snaps:
