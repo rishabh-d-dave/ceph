@@ -110,12 +110,15 @@ class TestWithIoLoad(SubvolAutoUpgrade):
                            initial_wait=self.INITIAL_WAIT)
         writer.start()
 
-        # this will trigger subvol auto-upgrade
+        log.info('running "subvol getpath" cmd, this will trigger subvol '
+                 'auto-upgrade')
         v3_sv_path = v2_subvol.getpath().strip()
+
+        log.info('"subvol getpath" cmd passed, so upgrade code was successful, '
+                 'validating upgraded subvol...')
         # getting v3 object
         v3 = SubvolV3(subvol=v2_subvol)
         self.assertEqual(v3_sv_path, v3.get_mnt_path())
-
         v3.sanity_test_meta_file()
         v3.sanity_test_subvol_ls()
         v3.sanity_test_subvol_getpath()
