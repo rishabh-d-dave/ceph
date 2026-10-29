@@ -20,7 +20,6 @@ from ..snapshot_util import mksnap, rmsnap
 from ..access import allow_access, deny_access
 from ...exception import IndexException, OpSmException, VolumeException, MetadataMgrException, EvictionError
 from ...fs_util import listsnaps, is_inherited_snap, create_base_dir
-from ...utils import safe_join
 from ..template import SubvolumeOpType
 from ..group import Group
 from ..rankevicter import RankEvicter
@@ -891,7 +890,7 @@ class SubvolumeV1(SubvolumeBase, SubvolumeTemplate, V3Compat):
         try:
             create_clone_index(self.fs, self.vol_spec)
             with open_clone_index(self.fs, self.vol_spec) as index:
-                track_idx = index.track(tgt_subvolume.base_path)
+                track_idx = index.track(tgt_subvolume.gen_mnt_path())
                 self._add_snap_clone(track_idx, snapname)
         except (IndexException, MetadataMgrException) as e:
             log.warning("error creating clone index: {0}".format(e))
