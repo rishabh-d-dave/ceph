@@ -6,7 +6,10 @@ log = getLogger(__name__)
 
 
 def gen_name(name, n=1):
-    name += str(randrange(1, 99))
+    number = randrange(1, 99)
+    # XXX: prefix 0 if number is single digit number so that names "snap3"
+    # can never match "snap34".
+    name += str(number) if number > 9 else f'0{number}'
     return name if n == 1 else [f'{name}{i}' for i in range(n)]
 
 

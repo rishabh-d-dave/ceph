@@ -535,14 +535,16 @@ class SubvolumeBase(object):
             return True
 
     def _get_version(self, subvol_mnt_path):
+        basename = os.path.basename
+        dirname = os.path.dirname
         subvol_version = int(self.md.get_global_option('version'))
         log.debug(f'subvol version from meta = {subvol_version}')
 
-        if os.path.basename(subvol_mnt_path) == 'mnt':
+        if basename(subvol_mnt_path) in ('mnt', '.retained'):
             disc_version = 3
             if subvol_version == disc_version:
                 return subvol_version
-        elif os.path.dirname(subvol_mnt_path) == to_str(self.base_path):
+        elif dirname(subvol_mnt_path) == to_str(self.base_path):
             disc_version = (2, 1)
             if subvol_version in disc_version:
                 return subvol_version

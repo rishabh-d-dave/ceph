@@ -22,7 +22,8 @@ from tasks.ceph_manager import write_conf
 from tasks.ceph_manager import CephManager, RunCephCmd
 from tasks.cephfs.fuse_mount import FuseMount
 from tasks.cephfs.kernel_mount import KernelMount
-from tasks.cephfs.helpers.subvolumes import SubvolV3, SubvolV2, SubvolV1
+from tasks.cephfs.helpers.subvolumes import SubvolV3Helper, SubvolV2Helper, \
+                                            SubvolV1Helper
 
 
 log = logging.getLogger(__name__)
@@ -904,16 +905,16 @@ class FilesystemBase(MDSClusterBase):
 
     def _create_subvol(self, subvol_name):
         if version == 3:
-            subvol = SubvolV3(self.mon_manager, mount, self.name, subvol_name,
-                              grp_name=grp_name)
+            subvol = SubvolV3Helper(self.mon_manager, mount, self.name,
+                                    subvol_name, grp_name=grp_name)
             subvol.create(create_opts)
         elif version == 2:
-            subvol = SubvolV2(self.mon_manager, mount, self.name, subvol_name,
-                              grp_name=grp_name)
+            subvol = SubvolV2Helper(self.mon_manager, mount, self.name,
+                                    subvol_name, grp_name=grp_name)
             subvol.custom_create(create_opts)
         elif version == 1:
-            subvol = SubvolV1(self.mon_manager, mount, self.name, subvol_name,
-                              grp_name=grp_name)
+            subvol = SubvolV1Helper(self.mon_manager, mount, self.name,
+                                    subvol_name, grp_name=grp_name)
             subvol.custom_create(create_opts)
         else:
             assert False
