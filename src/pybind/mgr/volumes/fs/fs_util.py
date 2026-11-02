@@ -158,6 +158,7 @@ def listsnaps(fs, volspec, snapdirpath, filter_inherited_snaps=True):
     :returns: list of snap names
     :rtype: list of utf8 encoded bytes
     """
+    log.info(f'mark123 snapdirpath = {snapdirpath}')
     if os.path.basename(snapdirpath) != volspec.SNAP_BASE_DIR.encode('utf-8'):
         raise VolumeException(-errno.EINVAL, "Not a snap directory: {0}".format(snapdirpath))
     snaps = []

@@ -812,6 +812,21 @@ class CephFSMountBase(object):
 
         return self.run_shell(args=args, omit_sudo=False).stdout.getvalue().strip()
 
+    def verify_path_is_reg(self, path):
+        file_type = self.get_shell_stdout(f'stat -c "%F" ./{path}').strip()
+        assert file_type == 'regular file', \
+            f'file_type = {file_type}, path = {path}'
+
+    def verify_path_is_dir(self, path):
+        file_type = self.get_shell_stdout(f'stat -c "%F" ./{path}').strip()
+        assert file_type == 'directory', \
+            f'file_type = {file_type}, path = {path}'
+
+    def verify_path_is_symlink(self, path):
+        file_type = self.get_shell_stdout(f'stat -c "%F" ./{path}').strip()
+        assert file_type == 'symbolic link', \
+            f'file_type = {file_type}, path = {path}'
+
     def create_destroy(self):
         assert(self.is_mounted())
 

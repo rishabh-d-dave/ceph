@@ -2,11 +2,12 @@
 Test subvolume auto-upgrades from subvolume v2 to subvolume v3 with and without
 IO load on subvolume.
 '''
+from errno import ENOENT
 from logging import getLogger
 from json import loads
 
 from tasks.cephfs.helpers.subvolumes import SubvolAutoUpgrade
-from tasks.cephfs.helpers.subvolumes import  SubvolV3, SubvolV2
+from tasks.cephfs.helpers.subvolumes import  SubvolV3Helper, SubvolV2Helper
 from tasks.cephfs.helpers.gen_io_load import GenIoLoad
 
 
@@ -23,20 +24,24 @@ class TestBasic(SubvolAutoUpgrade):
         Test subvol upgrade from v2 to v3 when subvol is located in the
         default subvol group.
         '''
-        v2_subvol = SubvolV2(self.mon_manager, self.admin_mount, self.volname)
+        v2_subvol = SubvolV2Helper(self.mon_manager, self.admin_mount,
+                                   self.fs.name, uuid=True)
         v2_subvol.custom_create()
-        v2_subvol.sanity_test_custom_made_subvol()
+        v2_subvol.verify_custom_made_subvol()
 
-        # XXX: TRIGGERING AUTO-UPGRADE
+        # XXX: triggering auto-upgrade
         v3_sv_path = v2_subvol.getpath()
 
         # building v3 object, nothing more.
-        v3_subvol = SubvolV3(subvol=v2_subvol)
+        v3_subvol = SubvolV3Helper(subvol=v2_subvol)
         # verify the path returned by last getpath cmd
-        self.assertEqual(v3_sv_path, v3_subvol.build_and_get_mnt_path())
-        v3_subvol.sanity_test_meta_file()
-        v3_subvol.sanity_test_subvol_ls()
-        v3_subvol.sanity_test_subvol_getpath()
+        self.assertEqual(v3_sv_path, v3_subvol.gen_mnt_path())
+
+        v3_subvol.verify_uuid()
+        v3_subvol.verify_layout()
+        v3_subvol.verify_meta_file()
+        v3_subvol.verify_subvol_ls_cmd()
+        v3_subvol.verify_subvol_getpath_cmd()
 
         v3_subvol.rm()
         self.wait_till_trash_is_empty()
@@ -46,21 +51,24 @@ class TestBasic(SubvolAutoUpgrade):
         Test subvol upgrade from v2 to v3 when subvol is located in a
         non-default subvol group.
         '''
-        v2_subvol = SubvolV2(self.mon_manager, self.admin_mount, self.volname,
-                      grp_name=True)
+        v2_subvol = SubvolV2Helper(self.mon_manager, self.admin_mount,
+                                   self.fs.name, uuid=True, grp_name=True)
         v2_subvol.custom_create()
-        v2_subvol.sanity_test_custom_made_subvol()
+        v2_subvol.verify_custom_made_subvol()
 
-        # XXX: TRIGGERING AUTO-UPGRADE
+        # XXX: triggering auto-upgrade
         v3_sv_path = v2_subvol.getpath()
 
         # building v3 object, nothing more.
-        v3_subvol = SubvolV3(subvol=v2_subvol)
+        v3_subvol = SubvolV3Helper(subvol=v2_subvol)
         # verify the path returned by last getpath cmd
-        self.assertEqual(v3_sv_path, v3_subvol.build_and_get_mnt_path())
-        v3_subvol.sanity_test_meta_file()
-        v3_subvol.sanity_test_subvol_ls()
-        v3_subvol.sanity_test_subvol_getpath()
+        self.assertEqual(v3_sv_path, v3_subvol.gen_mnt_path())
+
+        v3_subvol.verify_uuid()
+        v3_subvol.verify_layout()
+        v3_subvol.verify_meta_file()
+        v3_subvol.verify_subvol_ls_cmd()
+        v3_subvol.verify_subvol_getpath_cmd()
 
         v3_subvol.rm()
         self.wait_till_trash_is_empty()
@@ -69,23 +77,27 @@ class TestBasic(SubvolAutoUpgrade):
         '''
         Test subvol upgrade from v2 to v3 when it has a snap.
         '''
-        v2_subvol = SubvolV2(self.mon_manager, self.admin_mount, self.volname)
+        v2_subvol = SubvolV2Helper(self.mon_manager, self.admin_mount,
+                                   self.fs.name, uuid=True)
         v2_subvol.custom_create()
         snap_name = v2_subvol.custom_create_snap()
-        v2_subvol.sanity_test_custom_made_subvol()
+        v2_subvol.verify_custom_made_subvol()
 
-        # XXX: TRIGGERING AUTO-UPGRADE
+        # XXX: triggering auto-upgrade
         v3_sv_path = v2_subvol.getpath()
 
         # building v3 object, nothing more.
-        v3_subvol = SubvolV3(subvol=v2_subvol)
+        v3_subvol = SubvolV3Helper(subvol=v2_subvol)
         # verify the path returned by last getpath cmd
-        self.assertEqual(v3_sv_path, v3_subvol.build_and_get_mnt_path())
-        v3_subvol.sanity_test_meta_file()
-        v3_subvol.sanity_test_subvol_ls()
-        v3_subvol.sanity_test_subvol_getpath()
-        v3_subvol.sanity_test_snap_ls(snap_name)
-        v3_subvol.sanity_test_snap_getpath(snap_name)
+        self.assertEqual(v3_sv_path, v3_subvol.gen_mnt_path())
+
+        v3_subvol.verify_uuid()
+        v3_subvol.verify_layout()
+        v3_subvol.verify_meta_file()
+        v3_subvol.verify_subvol_ls_cmd()
+        v3_subvol.verify_subvol_getpath_cmd()
+        v3_subvol.verify_snap_ls_cmd(snap_name)
+        v3_subvol.verify_snap_getpath_cmd(snap_name, version=2)
 
         v3_subvol.snap_rm(snap_name)
         v3_subvol.rm()
@@ -107,27 +119,34 @@ class TestWithIoLoad(SubvolAutoUpgrade):
         Test subvol upgrade from v2 to v3 when subvol is located in the
         default subvol group and the subvol is under IO load.
         '''
-        v2_subvol = SubvolV2(self.mon_manager, self.admin_mount, self.volname)
+        v2_subvol = SubvolV2Helper(self.mon_manager, self.admin_mount, 
+                                   self.fs.name, uuid=True)
         v2_subvol.custom_create()
-        v2_subvol.sanity_test_custom_made_subvol()
+        v2_subvol.verify_custom_made_subvol()
 
-        writer = GenIoLoad(v2_subvol.build_and_get_mnt_path(), self.user_mount,
-                           self.CLIENT_ID, self.fs.data_pool_name,
-                           initial_wait=self.INITIAL_WAIT,
+        keyring = v2_subvol.custom_subvol_auth(self.CLIENT_ID,
+                                               self.fs.data_pool_name)
+        self.user_mount.remount(client_id=self.CLIENT_ID,
+                                client_keyring=keyring,
+                                cephfs_mntpt=v2_subvol.gen_mnt_path())
+        writer = GenIoLoad(self.user_mount, '/', initial_wait=self.INITIAL_WAIT,
                            raise_method=self.raise_method)
         writer.start()
 
-        # XXX: TRIGGERING AUTO-UPGRADE
+        # XXX: triggering auto-upgrade
         v3_sv_path = v2_subvol.getpath().strip()
 
         self.assertEqual(writer.is_alive(), True, self.IO_CRASHED_MSG)
         # building v3 object, nothing more.
-        v3_subvol = SubvolV3(subvol=v2_subvol)
+        v3_subvol = SubvolV3Helper(subvol=v2_subvol)
         # verify the path returned by last getpath cmd
-        self.assertEqual(v3_sv_path, v3_subvol.build_and_get_mnt_path())
-        v3_subvol.sanity_test_meta_file()
-        v3_subvol.sanity_test_subvol_ls()
-        v3_subvol.sanity_test_subvol_getpath()
+        self.assertEqual(v3_sv_path, v3_subvol.gen_mnt_path())
+
+        v3_subvol.verify_uuid()
+        v3_subvol.verify_layout()
+        v3_subvol.verify_meta_file()
+        v3_subvol.verify_subvol_ls_cmd()
+        v3_subvol.verify_subvol_getpath_cmd()
 
         writer.stop()
         # verify number of files written to ensure nothing was lost
@@ -142,27 +161,34 @@ class TestWithIoLoad(SubvolAutoUpgrade):
         subvol group and is under IO load via a client that has caps only for
         the data path of the subvol that is being upgraded.
         '''
-        v2_subvol = SubvolV2(self.mon_manager, self.admin_mount, self.volname)
+        v2_subvol = SubvolV2Helper(self.mon_manager, self.admin_mount,
+                                   self.fs.name, uuid=True)
         v2_subvol.custom_create()
-        v2_subvol.sanity_test_custom_made_subvol()
+        v2_subvol.verify_custom_made_subvol()
 
-        writer = GenIoLoad(v2_subvol.build_and_get_mnt_path(), self.user_mount,
-                           self.CLIENT_ID, self.fs.data_pool_name,
-                           initial_wait=self.INITIAL_WAIT,
+        keyring = v2_subvol.custom_subvol_auth(self.CLIENT_ID,
+                                               self.fs.data_pool_name)
+        self.user_mount.remount(client_id=self.CLIENT_ID,
+                                client_keyring=keyring,
+                                cephfs_mntpt=v2_subvol.gen_mnt_path())
+        writer = GenIoLoad(self.user_mount, '/', initial_wait=self.INITIAL_WAIT,
                            raise_method=self.raise_method)
         writer.start()
 
-        # XXX: TRIGGERING AUTO-UPGRADE
+        # XXX: triggering auto-upgrade
         v3_sv_path = v2_subvol.getpath().strip()
 
         self.assertEqual(writer.is_alive(), True, self.IO_CRASHED_MSG)
         # building v3 object, nothing more.
-        v3_subvol = SubvolV3(subvol=v2_subvol)
+        v3_subvol = SubvolV3Helper(subvol=v2_subvol)
         # verify the path returned by last getpath cmd
-        self.assertEqual(v3_sv_path, v3_subvol.build_and_get_mnt_path())
-        v3_subvol.sanity_test_meta_file()
-        v3_subvol.sanity_test_subvol_ls()
-        v3_subvol.sanity_test_subvol_getpath()
+        self.assertEqual(v3_sv_path, v3_subvol.gen_mnt_path())
+
+        v3_subvol.verify_uuid()
+        v3_subvol.verify_layout()
+        v3_subvol.verify_meta_file()
+        v3_subvol.verify_subvol_ls_cmd()
+        v3_subvol.verify_subvol_getpath_cmd()
 
         writer.stop()
         # verify number of files written to ensure nothing was lost
@@ -177,31 +203,38 @@ class TestWithIoLoad(SubvolAutoUpgrade):
         subvol group, contains a snapshot and is under IO load via a client that
         has caps only for the data path of the subvolume that is being upgraded.
         '''
-        v2_subvol = SubvolV2(self.mon_manager, self.admin_mount, self.volname)
+        v2_subvol = SubvolV2Helper(self.mon_manager, self.admin_mount,
+                                   self.fs.name, uuid=True)
         v2_subvol.custom_create()
         snap_name = v2_subvol.custom_create_snap()
-        v2_subvol.sanity_test_custom_made_subvol()
-        v2_subvol.sanity_test_custom_made_snap(snap_name)
+        v2_subvol.verify_custom_made_subvol()
+        v2_subvol.verify_custom_made_snap(snap_name)
 
-        writer = GenIoLoad(v2_subvol.build_and_get_mnt_path(), self.user_mount,
-                           self.CLIENT_ID, self.fs.data_pool_name,
-                           initial_wait=self.INITIAL_WAIT,
+        keyring = v2_subvol.custom_subvol_auth(self.CLIENT_ID,
+                                               self.fs.data_pool_name)
+        self.user_mount.remount(client_id=self.CLIENT_ID,
+                                client_keyring=keyring,
+                                cephfs_mntpt=v2_subvol.gen_mnt_path())
+        writer = GenIoLoad(self.user_mount, '/', initial_wait=self.INITIAL_WAIT,
                            raise_method=self.raise_method)
         writer.start()
 
-        # XXX: TRIGGERING AUTO-UPGRADE
+        # XXX: triggering auto-upgrade
         v3_sv_path = v2_subvol.getpath().strip()
 
         self.assertEqual(writer.is_alive(), True, self.IO_CRASHED_MSG)
         # building v3 object, nothing more.
-        v3_subvol = SubvolV3(subvol=v2_subvol)
+        v3_subvol = SubvolV3Helper(subvol=v2_subvol)
         # verify number of files written to ensure nothing was lost
-        self.assertEqual(v3_sv_path, v3_subvol.build_and_get_mnt_path())
-        v3_subvol.sanity_test_meta_file()
-        v3_subvol.sanity_test_subvol_ls()
-        v3_subvol.sanity_test_subvol_getpath()
-        v3_subvol.sanity_test_snap_ls(snap_name)
-        v3_subvol.sanity_test_snap_getpath(snap_name)
+        self.assertEqual(v3_sv_path, v3_subvol.gen_mnt_path())
+
+        v3_subvol.verify_uuid()
+        v3_subvol.verify_layout()
+        v3_subvol.verify_meta_file()
+        v3_subvol.verify_subvol_ls_cmd()
+        v3_subvol.verify_subvol_getpath_cmd()
+        v3_subvol.verify_snap_ls_cmd(snap_name)
+        v3_subvol.verify_snap_getpath_cmd(snap_name, version=2)
 
         writer.stop()
         # verify number of files written to ensure nothing was lost

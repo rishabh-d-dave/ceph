@@ -18,9 +18,9 @@ class GenIoLoad(RunCephCmd):
     to stop.
     '''
 
-    def __init__(self, path, mount, client_id=None, data_pool_name=None,
-                 initial_wait=0, writer_sleep=0, writer_timeout=60*60*15,
-                 raise_on_writer_crash=True, raise_method=None):
+    def __init__(self, mount, path, initial_wait=0, writer_sleep=0,
+                 writer_timeout=60*60*15, raise_on_writer_crash=True,
+                 raise_method=None):
         '''
         :param path: path to dir where IO load would be generated.
         :param mount: mount object to be used for generating IO load.
@@ -34,12 +34,10 @@ class GenIoLoad(RunCephCmd):
         :param writer_timeout: duration after which writer thread should be
                                  killed.
         '''
-        self.path = path
         self.mount = mount
+        self.path = path
         self._init_mon_manager()
         RunCephCmd.__init__(self, self.mon_manager)
-        self.client_id = client_id
-        self.data_pool_name = data_pool_name
 
         self.initial_wait = initial_wait
         self.writer_sleep = writer_sleep
@@ -83,24 +81,6 @@ class GenIoLoad(RunCephCmd):
            log.error(msg)
            raise RuntimeError(msg)
 
-    def create_client_and_remount(self):
-        if self.client_id and self.client_id == self.mount.client_id:
-            return
-        assert 'client.' not in self.client_id
-
-        if self.path[0] != '/':
-            self.path = '/' + self.path
-
-        client_name = f'client.{self.client_id}'
-        self.run_ceph_cmd(f'auth add {client_name} '
-                          'mon "allow r" '
-                          f'osd "allow rw pool={self.data_pool_name}" '
-                          f'mds "allow rw path={self.path}"')
-        keyring = self.get_ceph_cmd_stdout(f'auth get {client_name}')
-
-        self.mount.remount(client_id=self.client_id, client_keyring=keyring,
-                           cephfs_mntpt=self.path)
-
     # TODO implement self.writer_timeout
     def write_files(self):
         self.file_count = 1
@@ -114,10 +94,13 @@ class GenIoLoad(RunCephCmd):
             sleep(self.writer_sleep)
             self.file_count += 1
 
-    def start(self):
-        self.create_client_and_remount()
+    def get_initial_num_of_files(self):
+        file_count = self.mount.get_shell_stdout('find ./ -type f | wc -l')
+        self.initial_file_count = int(file_count.strip())
 
+    def start(self):
         threading.excepthook = self._handle_thread_crash
+        self.get_initial_num_of_files()
         self.writer = threading.Thread(target=self.write_files)
         self.writer.start()
 
@@ -157,7 +140,7 @@ class GenIoLoad(RunCephCmd):
         file_count = int(file_count.strip())
 
         # diff of zero or one is okay
-        diff = file_count - self.file_count
+        diff = file_count - self.file_count - self.initial_file_count
         if diff not in (0, 1):
             raise AssertionError(f'file_count = {file_count} self.file_count = '
                                  f'{self.file_count}')

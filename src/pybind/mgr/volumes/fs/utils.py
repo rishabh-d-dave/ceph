@@ -38,15 +38,12 @@ def to_utf8b(*args, bytes_encoding=DEFAULT_ENCODING):
     :rtype: Utf8BytesWrapper object or list of it
     '''
     if len(args) == 1:
-        args = args[0]
-        if type(args) in (list, tuple):
-            if not args:
-                return
-            return (Utf8BytesWrapper(args[0]), )
+        if type(args[0]) in (tuple, list):
+            return [Utf8BytesWrapper(a) for a in args[0]]
         else:
-            return Utf8BytesWrapper(args)
-
-    return [Utf8BytesWrapper(i) for i in args]
+            return Utf8BytesWrapper(args[0])
+    else:
+        return [Utf8BytesWrapper(a) for a in args]
 
 
 def to_str(*args):

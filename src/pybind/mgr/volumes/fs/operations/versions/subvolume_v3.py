@@ -131,19 +131,13 @@ class SubvolHelper:
         self.spec = spec
 
     def list_dirs(self, path):
-        subdirs = listdir(self.fs, path)
-        if not subdirs:
-            return subdirs
-        return to_utf8b(subdirs)
+        return to_utf8b(listdir(self.fs, path))
 
     def path_exists(self, path, follow_symlink=True):
         return path_exists(self.fs, path)
 
     def list_snaps(self, path):
-        snap_dirs = listsnaps(self.fs, self.spec, path)
-        if not snap_dirs:
-            return snap_dirs
-        return to_utf8b(snap_dirs)
+        return to_utf8b(listsnaps(self.fs, self.spec, path))
 
     def statx(self, path, fields=None):
         return statx(self.fs, path, fields)
@@ -321,8 +315,10 @@ class V1Incar(V1V2Base):
         return self._snap_base_path
 
     def is_snap_path(self, path):
-        dir_name = basename(dirname(dirname(path)))
-        return dir_name == MNT_DIR
+        if self.empty:
+            return
+
+        return (MNT_DIR == basename(dirname(dirname(path))))
 
 
 class V2Incar(V1V2Base):
@@ -365,9 +361,11 @@ class V2Incar(V1V2Base):
         return self._snap_base_path
 
     def is_snap_path(self, path):
-        dir_name = basename(dirname(dirname(path)))
+        if self.empty:
+            return
+
         subvol_name = basename(self.base_path)
-        return dir_name == subvol_name
+        return (subvol_name == basename(dirname(dirname(path))))
 
 
 class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
@@ -482,16 +480,16 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
     # ----- v3 helpers -----
 
 
-    def get_incar_path(self, uuid=None):
-        uuid = uuid if uuid else self.uuid
-        return safe_join(self.incar_base_path, uuid)
-
     def get_meta_file_name(self, uuid=None):
         uuid = uuid if uuid else self.uuid
         return META_FILE_NAME + '.' + uuid
 
-    def get_meta_file_path(self, uuid=None):
-        return safe_join(self.base_path, self.get_incar_meta_file_name(uuid))
+    def get_meta_path(self, uuid=None):
+        return safe_join(self.base_path, self.get_meta_file_name(uuid))
+
+    def get_incar_path(self, uuid=None):
+        uuid = uuid if uuid else self.uuid
+        return safe_join(self.incar_base_path, uuid)
 
     def get_mnt_path(self, uuid=None):
         return safe_join(self.get_incar_path(uuid), MNT_DIR)
@@ -656,6 +654,8 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
         with open_trashcan(self.fs, self.spec) as trashcan:
             trashcan.dump(self.get_incar_path(uuid))
 
+        self.fs.unlink(self.get_meta_path(uuid))
+
 
     # ----- helper methods for snap code -----
 
@@ -673,10 +673,9 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
             if snap_name in self.list_snaps(path):
                 return uuid
 
-    # Listing all snaps can be expensive due to possibility of multiple snaps in
-    # multiple incarnations. This methods returns as soon as it finds the given
-    # snap instead of listing all snaps and then finding the given snap in the list.
-    # So, use this method, instead, for finding a snap.
+    # Listing all snaps to find one can be unncessary and also expensive due to
+    # possibility of multiple snaps in multiple incarnations. Therefore, use
+    # this method instead.
     def has_v3_snap(self, snap_name=None):
         if snap_name:
             uuid = self.get_v3_incar_of_snap(snap_name)
@@ -804,12 +803,12 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
         assert len(subdirs) == 1,  \
             f'subdirs = {subdirs}'
 
-        return (subdirs[0] in (RETAINED_DIR, MNT_DIR))
+        return (subdirs[0] in (RETAINED_DIR))
 
     def update_meta_file_after_retain(self):
         self.md.remove_section(self.md.USER_METADATA_SECTION)
 
-        self.md.update_global_section('key', self.get_retained_path())
+        self.md.update_global_section('path', self.get_retained_path())
         self.md.update_global_section('state',
                                       SubvolumeStates.STATE_RETAINED.value)
 
