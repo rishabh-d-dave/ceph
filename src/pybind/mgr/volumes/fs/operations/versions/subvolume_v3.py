@@ -89,34 +89,11 @@ class PreV3Helper:
     def snapshot_base_path(self):
         return self.gen_snap_base_path()
 
-    # simply returns snap path, regardless of whether it exists.
-    #
-    # unfortunately, v1/v2 has this strange naming which doesn't tell enough.
-    # adhering with it for now to avoid unrelated group of changes to codebase
-    # in this patch series.
     def snapshot_path(self, snap_name):
         return self.gen_snap_path(snap_name)
 
-    # returns snap path if the snap exists.
-    #
-    # unfortunately, v1/v2 has this strange naming which doesn't tell enough.
-    # adhering with it for now to avoid unrelated group of changes to codebase
-    # in this patch series.
     def snapshot_data_path(self, snap_name):
-        if snap_path := self.get_snap_path(snap_name):
-            return snap_path
-
-        # TODO
-        # v2 raises exception if the snapshot path do not exist so do the same
-        # to prevent any bugs due to difference in behaviour.
-        #
-        # not raising exception indeed leads to a bug: the volumes plugin fails
-        # when exception is not raised by this method when it is calld by
-        # do_clone() method of async_cloner.py. this is made to happen by a test
-        # by deleting snapshot after running the snapshot clone cmd but before
-        # the clone operation actually begins. this is done by a adding a delay
-        # using mgr/volumes/snapshot_clone_delay config option.
-        raise VolumeException(ENOENT, f'snap "{snap_name}" does not exist')
+        return self.get_snap_data_path(snap_name)
 
     def list_snapshots(self):
         '''
@@ -130,6 +107,9 @@ class PreV3Helper:
 
     def remove_snapshot(self, snap_name, force):
         return self.rm_snap(snap_name, force)
+
+    def create_clone(self, pool, src_volname, src_subvol, snap_name):
+        self.create_as_clone(pool, src_volname, src_subvol, snap_name)
 
 
 class SubvolHelper:
@@ -261,6 +241,13 @@ class V1V2Base(SubvolHelper, PreV3Helper):
 
         if snap_name in self.get_snap_names():
             return safe_join(self.snap_base_path, snap_name)
+
+    def get_snap_data_path(self, snap_name):
+        if self.empty:
+            return
+
+        if snap_name in self.get_snap_names():
+            return safe_join(self.snap_base_path, snap_name, MNT_DIR)
 
     def has_snap(self, snap_name=None):
         if self.empty:
@@ -518,6 +505,9 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
     def gen_snap_path(self, snap_name, uuid=None):
         return safe_join(self.gen_snap_base_path(uuid), snap_name)
 
+    def gen_snap_data_path(self, snap_name, uuid=None):
+        return safe_join(self.gen_snap_base_path(uuid), snap_name, MNT_DIR)
+
     def get_v3_incars(self):
         return self.list_dirs(self.incar_base_path)
 
@@ -666,7 +656,7 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
 
         self.mark_subvolume()
         self.set_attrs(self.gen_mnt_path(), attrs)
-        log.debug(f'subvol {self.name}: xattrs applied successfully')
+        log.debug(f'subvol {self.name}: attributes set successfully')
 
         self._write_meta_file(subvol_type)
         self.set_meta_symlink(old_uuid)
@@ -783,6 +773,7 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
 
     def rm_snap(self, snap_name, force):
         snap_path = self.get_snap_path(snap_name)
+        log.info(f'snap_path = {snap_path}')
         if not snap_path:
             raise VolumeException(ENOENT, f'snap "{snap_name}" does not exist')
 
@@ -852,11 +843,36 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
             pass
         elif uuid := self.get_v3_incar_of_snap(snap_name):
             snap_path = self.gen_snap_path(snap_name, uuid)
-        # none of the incarnations had a snap with this name.
         else:
-            return None
+            raise VolumeException(ENOENT,
+                                  f'snapshot "{snap_name}" does not exist')
 
-        return snap_path if self.path_exists(snap_path) else None
+        if not self.path_exists(snap_path):
+            raise VolumeException(ENOENT,
+                                  f'snapshot "{snap_name}" does not exist')
+
+        return snap_path
+
+    def get_snap_data_path(self, snap_name):
+        '''
+        Find incarnation of the snapshot, including pre-v3 incarnations, and
+        return path where data of the snapshot resies.
+        '''
+        if snap_data_path := self.v1.get_snap_data_path(snap_name):
+            pass
+        elif snap_data_path := self.v2.get_snap_data_path(snap_name):
+            pass
+        elif uuid := self.get_v3_incar_of_snap(snap_name):
+            snap_data_path = self.gen_snap_data_path(snap_name, uuid)
+        else:
+            raise VolumeException(ENOENT,
+                                  f'snapshot "{snap_name}" does not exist')
+
+        if not self.path_exists(snap_data_path):
+            raise VolumeException(ENOENT,
+                                  f'snapshot "{snap_name}" does not exist')
+
+        return snap_data_path
 
 
     # ----- methods for subvol removal while retaining snaps -----
@@ -913,6 +929,57 @@ class SubvolumeV3(SubvolHelper, PreV3Helper, SubvolumeV2):
             self.fs.rename(self.gen_mnt_path(), self.gen_retained_path())
         except MetadataMgrException as e:
             log.error(f"failed to write config: {e}")
+            raise VolumeException(exception=e)
+
+
+    # ----- methods for subvol snap clone op -----
+
+
+    def add_clone_src_to_meta_file(self, volname, subvolume, snapname):
+        self.md.add_section("source")
+        self.md.update_section("source", "volume", volname)
+        if not subvolume.group.is_default_group():
+            self.md.update_section("source", "group", subvolume.group_name)
+        self.md.update_section("source", "subvolume", subvolume.subvol_name)
+        self.md.update_section("source", "incar", self.uuid)
+        self.md.update_section("source", "snapshot", snapname)
+        self.md.flush()
+
+    def add_clone_failure_to_meta_file(self, errno, error_msg):
+        try:
+            self.md.add_section(self.md.CLONE_FAILURE_SECTION)
+            self.md.update_section(self.md.CLONE_FAILURE_SECTION,
+                                   self.md.CLONE_FAILURE_META_KEY_ERRNO, errno)
+            self.md.update_section(self.md.CLONE_FAILURE_SECTION,
+                                   self.md.CLONE_FAILURE_META_KEY_ERROR_MSG, error_msg)
+            self.md.flush()
+        except MetadataMgrException as e:
+            raise VolumeException(exception=e)
+
+    def create_as_clone(self, pool, src_volname, src_subvol, snap_name):
+        try:
+            # source snapshot attrs are used to create clone subvolume
+            # attributes of subvolume's content though, are synced during the cloning process.
+            attrs = src_subvol.get_attrs(src_subvol.get_snap_path(snap_name))
+            mode = attrs.pop('mode')
+
+            # The source of the clone may have exceeded its quota limit as
+            # CephFS quotas are imprecise. Cloning such a source may fail if
+            # the quota on the destination is set before starting the clone
+            # copy. So always set the quota on destination after cloning is
+            # successful.
+            attrs["quota"] = None
+
+            # override snapshot pool setting, if one is provided for the clone
+            if pool is not None:
+                attrs["data_pool"] = pool
+                attrs["pool_namespace"] = None
+
+            self._create(mode, attrs, SubvolumeTypes.TYPE_CLONE, auth=False)
+            self.add_clone_src_to_meta_file(src_volname, src_subvol, snap_name)
+        except (VolumeException, MetadataMgrException, Error) as e:
+            self._cleanup_on_creation_failure(e)
+        except Exception as e:
             raise VolumeException(exception=e)
 
 

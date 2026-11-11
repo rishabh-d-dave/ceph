@@ -529,27 +529,23 @@ class Utf8BytesWrapper:
     def __contains__(self, val):
         return (self.to_utf8b(val) in self.data)
 
+    def encode(self, encoding=DEFAULT_ENCODING):
+        if encoding == DEFAULT_ENCODING:
+            return self.data
+        else:
+            return self.data.decode(DEFAULT_ENCODING).encode(encoding)
 
+
+'''
 def encode(*args, **kwargs) -> bytes:
     encoding = kwargs.pop('encoding', 'utf-8')
 
-    newargs = []
     for val in args:
-        val_type = type(val)
+        val = cstr(val)
 
-        if val_type is bytes:
-            newargs.append(val)
-        elif val_type is str:
-            newargs.append(val.encode(encoding))
-        elif val_type in (int, float, bool):
-            newargs.append(str(val).encode(encoding))
-        elif val_type is Utf8BytesWrapper:
-            newargs.append(bytes(val))
-        else:
-            raise TypeError(f'val = {val}, val_type = {val_type}, '
-                            f'args = {args}')
-
+    newargs = []
     return newargs if len(newargs) > 1 else newargs[0]
+'''
 
 
 def cstr(val, name, encoding="utf-8", opt=False) -> bytes:
@@ -560,15 +556,24 @@ def cstr(val, name, encoding="utf-8", opt=False) -> bytes:
     :param str name: Name of the string parameter, for exceptions
     :param str encoding: Encoding to use
     :param bool opt: If True, None is allowed
-    :raises: :class:`InvalidArgument`
     """
     if opt and val is None:
         return None
 
-    val = encode(val, encoding=encoding)
+    val_type = type(val)
 
-    assert isinstance(val, bytes), \
-        f'val = {val}, type(val) = {type(val)}'
+    if val_type is bytes:
+        pass
+    elif val_type is str:
+        val = val.encode(encoding)
+    elif val_type in (int, float, bool):
+        val = str(val).encode(encoding)
+    elif val_type is Utf8BytesWrapper:
+        val = bytes(val)
+    else:
+        raise TypeError(f'Received invalid type for varible name = "{name}", '
+                        f'its value = {val}, val_type = {val_type}')
+
     return val
 
 def cstr_list(list_str, name, encoding="utf-8"):
@@ -3403,15 +3408,8 @@ cdef class LibCephFS(object):
 
         If src is regfile, symlink or something else, copy it to dst and return.
         '''
-        if isinstance(src_path, str):
-            src_path = src_path.encode('utf-8')
-        else:
-            assert isinstance(src_path, bytes)
-
-        if isinstance(dst_path, str):
-            dst_path = dst_path.encode('utf-8')
-        else:
-            assert isinstance(dst_path, bytes)
+        src_path = cstr(src_path, 'src_path')
+        dst_path = cstr(dst_path, 'dst_path')
 
         if not should_cancel:
             should_cancel = lambda: False

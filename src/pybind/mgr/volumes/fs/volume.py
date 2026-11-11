@@ -279,7 +279,7 @@ class VolumeClient(CephfsClient["Module"]):
         mode = octal_str_to_decimal_int(mode)
         attrs = {'uid': uid, 'gid': gid, 'data_pool': pool,'quota': size,
                  'earmark': earmark, 'enctag': enctag,
-                 'pool_namespace': isolate_ns,
+                 'pool_namespace': isolate_ns if isolate_ns else None,
                  'normalization': normalization, 'casesensitive': casesensitive}
 
         try:

@@ -815,6 +815,9 @@ class SubvolV3Helper(SubvolBase):
     def gen_snap_path(self, snap_name, uuid=None):
         return join(self.gen_snap_base_path(uuid), snap_name)
 
+    def gen_snap_data_path(self, snap_name, uuid=None):
+        return join(self.gen_snap_base_path(uuid), snap_name, self.MNT_DIR)
+
     def gen_v2_snap_path(self, snap_name, uuid=None):
         return join(self.gen_base_path(), SNAP_BASE_DIR, snap_name)
 
@@ -937,16 +940,20 @@ class SubvolV3Helper(SubvolBase):
             if not incar.snap_names:
                 return
             for snap_name in incar.snap_names:
-                try:
-                    self.mount.verify_path_is_dir(self.gen_snap_path(
-                        snap_name, incar.uuid))
-                except:
+                # TODO: check of v2/v1 path only in case of v2/v1 snap
+                snap_data_paths = (
+                    self.gen_snap_data_path(snap_name, incar.uuid),
+                    #self.gen_v1_snap_data_path(snap_name, incar.uuid),
+                    #self.gen_v2_snap_data_path(snap_name, incar.uuid))
+                    self.gen_v1_snap_path(snap_name, incar.uuid),
+                    self.gen_v2_snap_path(snap_name, incar.uuid))
+                for path in snap_data_paths:
                     try:
-                        self.mount.verify_path_is_dir(
-                            self.gen_v2_snap_path(snap_name, incar.uuid))
+                        self.mount.verify_path_is_dir(path)
                     except:
-                        self.mount.verify_path_is_dir(
-                            self.gen_v1_snap_path(snap_name, incar.uuid))
+                        continue
+                    else:
+                        break
 
     def verify_meta_file(self):
         meta_content = self.mount.get_shell_stdout('sudo cat '
