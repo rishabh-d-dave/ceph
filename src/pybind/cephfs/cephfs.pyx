@@ -547,7 +547,6 @@ def cstr(val, name, encoding=DEFAULT_ENCODING, opt=False) -> bytes:
     :param str name: Name of the string parameter, for exceptions
     :param str encoding: Encoding to use
     :param bool opt: If True, None is allowed
-    :raises: :class:`InvalidArgument`
     """
     if opt and val is None:
         return None
