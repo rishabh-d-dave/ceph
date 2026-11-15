@@ -1063,20 +1063,29 @@ class SubvolV3Helper(SubvolBase):
     # ----- misc methods -----
 
 
+    '''
     @property
     def v1_uuid(self):
         if not self._v1_uuid:
-            self._v1_uuid = self.fetch_v1_uuid()
+            self._v1_uuid = self.fetch_uuid()
         return self._v1_uuid
 
-    def fetch_v1_uuid(self):
+    @property
+    def v2_uuid(self):
+        if not self._v2_uuid:
+            self._v2_uuid = self.fetch_uuid()
+        return self._v2_uuid
+
+    def fetch_uuid(self):
         meta_content = self.mount.get_shell_stdout('sudo cat '
                                                    f'./{self.gen_meta_path()}')
         # splitting ensures we compare line by line, which prevents any
         # accidental matching due to edge cases
         meta_content = meta_content.split('\n')
         for line in meta_content:
-            if 'v1_incar = ' in line:
-                return line.replace('v1_incar = ', '')
+            if 'prevpath = ' in line:
+                line = line.replace('prevpath = ', '')
+                return basename(line)
         else:
             assert False
+    '''
