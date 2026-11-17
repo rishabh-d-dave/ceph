@@ -10409,7 +10409,7 @@ class TestSubvolumeV1(VolumesHelper):
                             '.snap', snap_name)
 
 
-class _TestSubvolumeV0(VolumesHelper):
+class TestSubvolumeV0(VolumesHelper):
     '''
     Test for v0/legacy subvolumes.
     '''
