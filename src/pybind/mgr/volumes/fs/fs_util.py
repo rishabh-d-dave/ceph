@@ -124,7 +124,8 @@ def is_inherited_snap(snapname):
     """
     return snapname.startswith("_")
 
-def listsnaps(fs, volspec, snapdirpath, filter_inherited_snaps=False):
+
+def listsnaps(fs, volspec, snapdirpath, filter_inherited_snaps=True):
     """
     Get the snap names from a given snap directory path
     """
