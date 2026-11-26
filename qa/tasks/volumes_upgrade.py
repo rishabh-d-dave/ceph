@@ -31,8 +31,8 @@ from textwrap import dedent
 
 from teuthology import misc
 from teuthology.contextutil import safe_while
-from teuthology.orchestra import run
 
+from tasks.cephfs.helpers.gen_io_load import RemoteIoLoad
 from tasks.cephfs.helpers.subvolumes import (
     as_relpath,
     subvol_base_path,
@@ -149,43 +149,6 @@ INFO_KEPT = ('type', 'uid', 'gid', 'mode', 'data_pool', 'pool_namespace',
 # `fs subvolume info` fields a clone gets from (the snapshot of) its source
 CLONE_INFO_KEPT = ('uid', 'gid', 'mode', 'data_pool', 'pool_namespace',
                    'bytes_quota', 'earmark')
-
-# Runs on the client node as root, from within the subvolume mount. Writes
-# files until the stop file appears, periodically re-verifying recent writes
-# and doing namespace operations. Any failure (e.g., EACCES/ESTALE after the
-# subvolume's data dir gets renamed during auto-upgrade) makes it exit
-# non-zero. The checksum manifest is kept outside CephFS on purpose.
-WRITER_SCRIPT = dedent('''\
-    set -u
-    mnt=$1
-    state=$2
-    manifest=$state/manifest
-    fail() { echo "$(date -u +%FT%T) writer: $*" >&2; exit 1; }
-    : > "$manifest" || fail "creating manifest"
-    cd "$mnt" || fail "cd $mnt"
-    mkdir -p io || fail "mkdir io"
-    i=0
-    while [ ! -e "$state/stop" ]; do
-        i=$((i + 1))
-        f=io/f.$i
-        dd if=/dev/urandom of=$f.tmp bs=4k count=4 conv=fsync status=none || fail "write $f.tmp"
-        mv $f.tmp $f || fail "rename $f.tmp"
-        md5sum $f >> "$manifest" || fail "checksum $f"
-        if [ $((i % 20)) -eq 0 ]; then
-            tail -n 20 "$manifest" | md5sum -c --quiet || fail "verify at $i"
-            mkdir io/d.$i && rmdir io/d.$i || fail "mkdir/rmdir io/d.$i"
-            ls io > /dev/null || fail "readdir"
-            stat . > /dev/null || fail "stat"
-        fi
-        echo $i > "$state/progress"
-        sleep 0.5
-    done
-    md5sum -c --quiet "$manifest" || fail "final verify"
-    n=$(find io -maxdepth 1 -name "f.*" ! -name "*.tmp" | wc -l)
-    [ "$n" -eq "$i" ] || fail "found $n files, wrote $i"
-    echo "writer: wrote and verified $i files"
-''')
-
 
 class Subvol:
     def __init__(self, name, group):
@@ -898,37 +861,15 @@ def _assert_pending_clones(st, sv, snap, expected):
         f'{sv}: snapshot {snap} info = {info}, expected has_pending_clones = {expected}'
 
 
-# ----- IO writers -----
+# ----- IO writers (RemoteIoLoad from helpers/gen_io_load.py) -----
 
 
 def _start_writer(st, mount, sv):
     statedir = f'{st.testdir}/volumes_upgrade.io.{sv.name}'
-    script = f'{st.testdir}/volumes_upgrade.writer.sh'
-    remote = mount.client_remote
-    remote.run(args=['sudo', 'rm', '-rf', statedir])
-    remote.run(args=['mkdir', '-p', statedir])
-    remote.write_file(script, WRITER_SCRIPT)
-    proc = remote.run(
-        args=['sudo', 'stdin-killer', '--timeout=60', '--',
-              'bash', script, mount.mountpoint, statedir],
-        wait=False, stdin=run.PIPE, label=f'writer {sv}')
-    return dict(mount=mount, sv=sv, statedir=statedir, proc=proc)
-
-
-def _writer_progress(w):
-    if w['proc'].finished:
-        # surfaces the writer's exit status
-        w['proc'].wait()
-        raise RuntimeError(f'writer for {w["sv"]} exited prematurely')
-    remote = w['mount'].client_remote
-    out = remote.sh(f'cat {w["statedir"]}/progress 2>/dev/null || echo 0')
-    return int(out.strip())
-
-
-def _wait_for_writer_progress(w, nfiles, timeout=300):
-    start = _writer_progress(w)
-    _wait_for(f'writer for {w["sv"]} to write {nfiles} files past {start}',
-              lambda: _writer_progress(w) >= start + nfiles, timeout)
+    w = RemoteIoLoad(mount, statedir, label=str(sv))
+    w.sv = sv
+    w.start()
+    return w
 
 
 def _remount(st, mount, sv, path, **kwargs):
@@ -948,15 +889,10 @@ def _remount_and_verify(st, w, path, client_id, **creds):
     the data written by the writer is accessible and intact, and that the
     subvolume is writable.
     """
-    mount, sv = w['mount'], w['sv']
+    mount, sv = w.mount, w.sv
     log.info(f'{sv}: remounting as client.{client_id} at /{path}')
     _remount(st, mount, sv, path, client_id=client_id, **creds)
-    manifest = f'{w["statedir"]}/manifest'
-    mount.run_shell(['sudo', 'md5sum', '-c', '--quiet', manifest], timeout=1800)
-    nlines = int(mount.client_remote.sh(f'wc -l < {manifest}').strip())
-    found = int(mount.get_shell_stdout(
-        'sudo find io -maxdepth 1 -name "f.*" ! -name "*.tmp" | wc -l').strip())
-    assert found == nlines, f'{sv}: {found} files after remount, expected {nlines}'
+    w.verify_data()
     mount.run_shell(['sudo', 'bash', '-c',
                      f'echo {client_id} > io/post-remount && '
                      f'grep -q {client_id} io/post-remount && '
@@ -965,11 +901,7 @@ def _remount_and_verify(st, w, path, client_id, **creds):
 
 def _kill_writers(st):
     for w in st.writers:
-        if not w['proc'].finished:
-            log.info(f'killing writer for {w["sv"]}')
-            w['mount'].client_remote.run(
-                args=['sudo', 'pkill', '-KILL', '-f', 'volumes_upgrade.writer.sh'],
-                check_status=False)
+        w.kill()
 
 
 def _kill_writers_on_failure(func):
@@ -993,16 +925,6 @@ def _kill_writers_on_failure(func):
                 log.exception('failed to unmount extra sessions')
             raise
     return wrapper
-
-
-def _stop_writer(w):
-    remote = w['mount'].client_remote
-    remote.run(args=['sudo', 'touch', f'{w["statedir"]}/stop'])
-    _wait_for(f'writer for {w["sv"]} to stop',
-              lambda: w['proc'].finished, timeout=900)
-    w['proc'].stdin.close()
-    w['proc'].wait()
-    return int(remote.sh(f'cat {w["statedir"]}/progress').strip())
 
 
 # ----- auth IDs and evict -----
@@ -1434,10 +1356,10 @@ def _setup_io(st):
         st.writers.append(_start_writer(st, mount, sv))
 
     for w, nsnaps in zip(st.writers, IO_NSNAPS):
-        _wait_for_writer_progress(w, 20)
+        w.wait_for_progress(20)
         for j in range(nsnaps):
-            _pre_v3_snap_create(st, w['sv'], f'snap_v{st.version}_{j}')
-            _wait_for_writer_progress(w, 20)
+            _pre_v3_snap_create(st, w.sv, f'snap_v{st.version}_{j}')
+            w.wait_for_progress(20)
 
 
 # ----- pre-v3 subvolumes -----
@@ -1568,7 +1490,8 @@ def _teardown(st):
         # --one-file-system: don't descend into an extra session's mount
         # that failed to unmount
         remote.run(args=['sudo', 'bash', '-c',
-                         f'rm -rf --one-file-system {st.testdir}/volumes_upgrade.*'],
+                         f'rm -rf --one-file-system {st.testdir}/volumes_upgrade.* '
+                         f'{st.testdir}/{RemoteIoLoad.SCRIPT_BASENAME}'],
                    check_status=False)
 
 
@@ -1664,7 +1587,7 @@ def check_io(ctx, config):
     """
     st = _state(ctx)
     for w in st.writers:
-        _wait_for_writer_progress(w, 10)
+        w.wait_for_progress(10)
 
 
 @_kill_writers_on_failure
@@ -1734,9 +1657,9 @@ def post_upgrade(ctx, config):
     # first subvolume command on each subvolume triggers its auto-upgrade;
     # the writers must carry on regardless.
     for w in st.writers:
-        sv = w['sv']
+        sv = w.sv
         _assert_attrs(st, sv, _assert_v3(st, sv))
-        _wait_for_writer_progress(w, 20)
+        w.wait_for_progress(20)
     _assert_authorized(st)
 
     _wait_for_clones(st, lambda c: _assert_v3(st, c))
@@ -1805,8 +1728,8 @@ def post_upgrade(ctx, config):
               lambda: _trash_entries(st) == 0, timeout=1800, sleep=10)
 
     for w in st.writers:
-        sv = w['sv']
-        written = _stop_writer(w)
+        sv = w.sv
+        written = w.stop()
         path = _getpath(st, sv)[1].lstrip('/')
         found = _count_files(st, f'{path}/io')
         log.info(f'{sv}: writer wrote {written} files, found {found} at {path}')
@@ -1816,7 +1739,7 @@ def post_upgrade(ctx, config):
     # path, with either the credentials they had been using (authorized for
     # the v2 path) or with ones authorized after the upgrade.
     for i, w in enumerate(st.writers):
-        sv, mount = w['sv'], w['mount']
+        sv, mount = w.sv, w.mount
         path = _getpath(st, sv)[1].lstrip('/')
         _remount_and_verify(st, w, path, mount.client_id,
                             client_keyring_path=mount.client_keyring_path)

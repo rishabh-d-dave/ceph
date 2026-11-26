@@ -1,4 +1,6 @@
 from logging import getLogger
+from os.path import dirname
+from textwrap import dedent
 from time import sleep
 import threading
 
@@ -6,6 +8,7 @@ from tasks.ceph_manager import RunCephCmd
 
 from teuthology.contextutil import safe_while
 from teuthology.misc import get_first_mon
+from teuthology.orchestra import run
 
 
 log = getLogger(__name__)
@@ -162,3 +165,143 @@ class GenIoLoad(RunCephCmd):
         if diff not in (0, 1):
             raise AssertionError(f'file_count = {file_count} self.file_count = '
                                  f'{self.file_count}')
+
+
+class RemoteIoLoad:
+    '''
+    Continuous IO via a long-lived bash writer on the client remote.
+
+    Unlike GenIoLoad (Python thread issuing mount.run_shell per file), the
+    script stays in the mount so ESTALE/EACCES after a path rename (e.g.
+    subvolume auto-upgrade) fails the writer, and an md5 manifest is kept
+    outside CephFS for remount verification.
+    '''
+
+    SCRIPT_BASENAME = 'gen_io_load.writer.sh'
+
+    # Runs as root from within the mount. Writes until statedir/stop appears.
+    # Manifest and progress live in statedir (not on CephFS).
+    WRITER_SCRIPT = dedent('''\
+        set -u
+        mnt=$1
+        state=$2
+        manifest=$state/manifest
+        fail() { echo "$(date -u +%FT%T) writer: $*" >&2; exit 1; }
+        : > "$manifest" || fail "creating manifest"
+        cd "$mnt" || fail "cd $mnt"
+        mkdir -p io || fail "mkdir io"
+        i=0
+        while [ ! -e "$state/stop" ]; do
+            i=$((i + 1))
+            f=io/f.$i
+            dd if=/dev/urandom of=$f.tmp bs=4k count=4 conv=fsync status=none || fail "write $f.tmp"
+            mv $f.tmp $f || fail "rename $f.tmp"
+            md5sum $f >> "$manifest" || fail "checksum $f"
+            if [ $((i % 20)) -eq 0 ]; then
+                tail -n 20 "$manifest" | md5sum -c --quiet || fail "verify at $i"
+                mkdir io/d.$i && rmdir io/d.$i || fail "mkdir/rmdir io/d.$i"
+                ls io > /dev/null || fail "readdir"
+                stat . > /dev/null || fail "stat"
+            fi
+            echo $i > "$state/progress"
+            sleep 0.5
+        done
+        md5sum -c --quiet "$manifest" || fail "final verify"
+        n=$(find io -maxdepth 1 -name "f.*" ! -name "*.tmp" | wc -l)
+        [ "$n" -eq "$i" ] || fail "found $n files, wrote $i"
+        echo "writer: wrote and verified $i files"
+    ''')
+
+    def __init__(self, mount, statedir, *, label=None):
+        self.mount = mount
+        self.statedir = statedir
+        self.label = label if label is not None else statedir
+        self.proc = None
+        self._script_path = None
+
+    @property
+    def remote(self):
+        return self.mount.client_remote
+
+    @property
+    def manifest_path(self):
+        return f'{self.statedir}/manifest'
+
+    @property
+    def finished(self):
+        return self.proc is None or self.proc.finished
+
+    def start(self):
+        remote = self.remote
+        remote.run(args=['sudo', 'rm', '-rf', self.statedir])
+        remote.run(args=['mkdir', '-p', self.statedir])
+        # One script copy under the statedir parent (typically the testdir);
+        # pkill -f matches SCRIPT_BASENAME.
+        self._script_path = f'{dirname(self.statedir)}/{self.SCRIPT_BASENAME}'
+        remote.write_file(self._script_path, self.WRITER_SCRIPT)
+        self.proc = remote.run(
+            args=['sudo', 'stdin-killer', '--timeout=60', '--',
+                  'bash', self._script_path, self.mount.mountpoint,
+                  self.statedir],
+            wait=False, stdin=run.PIPE, label=f'writer {self.label}')
+        return self
+
+    def ensure_alive(self):
+        if self.proc is None:
+            raise RuntimeError(f'writer for {self.label} was never started')
+        if self.proc.finished:
+            self.proc.wait()
+            raise RuntimeError(f'writer for {self.label} exited prematurely')
+
+    @property
+    def progress(self):
+        self.ensure_alive()
+        out = self.remote.sh(
+            f'cat {self.statedir}/progress 2>/dev/null || echo 0')
+        return int(out.strip())
+
+    def wait_for_progress(self, nfiles, timeout=300, sleep=5):
+        start = self.progress
+        target = start + nfiles
+        action = (f'writer for {self.label} to write {nfiles} files '
+                  f'past {start}')
+        with safe_while(sleep=sleep, tries=max(1, timeout // sleep),
+                        action=action) as proceed:
+            while proceed():
+                if self.progress >= target:
+                    return self.progress
+
+    def stop(self, timeout=900, sleep=5):
+        self.remote.run(args=['sudo', 'touch', f'{self.statedir}/stop'])
+        action = f'writer for {self.label} to stop'
+        with safe_while(sleep=sleep, tries=max(1, timeout // sleep),
+                        action=action) as proceed:
+            while proceed():
+                if self.proc.finished:
+                    break
+        self.proc.stdin.close()
+        self.proc.wait()
+        return int(self.remote.sh(f'cat {self.statedir}/progress').strip())
+
+    def kill(self):
+        if self.proc is not None and not self.proc.finished:
+            log.info(f'killing writer for {self.label}')
+            self.remote.run(
+                args=['sudo', 'pkill', '-KILL', '-f', self.SCRIPT_BASENAME],
+                check_status=False)
+
+    def verify_data(self):
+        """
+        After remount (or when the writer has stopped): checksums match the
+        outside-CephFS manifest and the file count agrees.
+        """
+        manifest = self.manifest_path
+        self.mount.run_shell(
+            ['sudo', 'md5sum', '-c', '--quiet', manifest], timeout=1800)
+        nlines = int(self.remote.sh(f'wc -l < {manifest}').strip())
+        found = int(self.mount.get_shell_stdout(
+            'sudo find io -maxdepth 1 -name "f.*" ! -name "*.tmp" | wc -l'
+            ).strip())
+        assert found == nlines, \
+            f'{self.label}: {found} files, expected {nlines} per manifest'
+        return found
