@@ -26,13 +26,23 @@ import json
 import logging
 import re
 import time
-import uuid
 from configparser import ConfigParser
 from textwrap import dedent
 
 from teuthology import misc
 from teuthology.contextutil import safe_while
 from teuthology.orchestra import run
+
+from tasks.cephfs.helpers.subvolumes import (
+    as_relpath,
+    subvol_base_path,
+    subvol_pool_namespace,
+    subvol_pre_v3_snap_path,
+    SubvolV1Helper,
+    SubvolV2Helper,
+    SubvolV3Helper,
+    EARMARK_XATTR as HELPER_EARMARK_XATTR,
+)
 
 log = logging.getLogger(__name__)
 
@@ -132,7 +142,7 @@ SNAP_METADATA_KEY = 'vu_snap_key'
 # `fs subvolume snapshot info` fields that must be as the old ceph-mgr
 # reported them
 SNAP_INFO_KEPT = ('created_at', 'data_pool')
-EARMARK_XATTR = 'user.ceph.subvolume.earmark'
+EARMARK_XATTR = HELPER_EARMARK_XATTR
 # `fs subvolume info` fields that must be as the old ceph-mgr reported them
 INFO_KEPT = ('type', 'uid', 'gid', 'mode', 'data_pool', 'pool_namespace',
              'bytes_quota', 'created_at', 'earmark')
@@ -181,7 +191,11 @@ class Subvol:
     def __init__(self, name, group):
         self.name = name
         self.group = group
-        self.base = f'volumes/{group or "_nogroup"}/{name}'
+        # relative to fs-root mount cwd (helpers use absolute /volumes/...)
+        self.base = None
+        # SubvolV1Helper / SubvolV2Helper / SubvolV3Helper (bound by
+        # _bind_helper); after auto-upgrade, replaced with SubvolV3Helper
+        self.helper = None
         # subvolume version before auto-upgrade to v3
         self.version = 2
         # path to the pre-v3 (v1/v2) data dir, relative to fs root
@@ -214,6 +228,19 @@ class Subvol:
 
     def __str__(self):
         return f'{self.group or "_nogroup"}/{self.name}'
+
+
+def _bind_helper(st, sv, version):
+    """
+    Attach a SubvolV1Helper / SubvolV2Helper for this subvolume. Layout and
+    CLI ops go through the helper; suite-specific state stays on Subvol.
+    """
+    cls = SubvolV1Helper if version == 1 else SubvolV2Helper
+    sv.version = version
+    sv.helper = cls(st.manager, st.admin, VOLNAME,
+                    name=sv.name, grp_name=sv.group)
+    sv.base = as_relpath(sv.helper.gen_base_path())
+    return sv.helper
 
 
 class State:
@@ -396,8 +423,14 @@ def _count_files(st, path):
     return int(out.strip())
 
 
+def _sv_base(sv):
+    if sv.base:
+        return sv.base
+    return as_relpath(subvol_base_path(sv.name, sv.group))
+
+
 def _read_meta(st, sv, meta='.meta'):
-    out = _admin_sh(st, f'cat {sv.base}/{meta}')
+    out = _admin_sh(st, f'cat {_sv_base(sv)}/{meta}')
     cp = ConfigParser()
     cp.read_string(out)
     return cp
@@ -418,6 +451,8 @@ def _diff(expected, actual):
 
 
 def _getpath(st, sv, check_status=True):
+    if check_status and sv.helper is not None:
+        return 0, sv.helper.getpath()
     rc, out = _ceph(st, f'fs subvolume getpath {VOLNAME} {sv.name}{sv.grp_arg}',
                     check_status=check_status)
     return rc, out.strip()
@@ -454,7 +489,8 @@ def _assert_pre_v3(st, sv, strict=False):
     snapshots to v2 on access, the layout being the same. Unless strict, such
     a v1 subvolume may be either.
     """
-    ftype = _admin_sh(st, f'stat -c %F {sv.base}/.meta').strip()
+    base = _sv_base(sv)
+    ftype = _admin_sh(st, f'stat -c %F {base}/.meta').strip()
     assert ftype == 'regular file', f'{sv}: .meta is a {ftype}'
     meta = _read_meta(st, sv)
     version = meta.get('GLOBAL', 'version')
@@ -465,7 +501,7 @@ def _assert_pre_v3(st, sv, strict=False):
     path = meta.get('GLOBAL', 'path')
     assert path == f'/{sv.data_path}', f'{sv}: meta path = {path}'
     out = _admin_sh(st, f'test -d {sv.data_path} && echo yes; '
-                        f'test -e {sv.base}/roots && echo yes || echo no')
+                        f'test -e {base}/roots && echo yes || echo no')
     assert out.split() == ['yes', 'no'], \
         f'{sv}: half-upgraded subvolume (v2 dir, roots dir present?: {out.split()})'
 
@@ -478,29 +514,50 @@ def _assert_v3(st, sv):
     (so that clients need not remount), along with any v1 snapshots (taken
     in the data dir), while v2 snapshots stay where they were
     (<subvolume>/.snap).
+
+    Layout checks are delegated to SubvolV3Helper.
     """
-    _, path = _getpath(st, sv)
-    m = re.fullmatch(rf'/{re.escape(sv.base)}/roots/([0-9a-f-]{{36}})/mnt', path)
-    assert m, f'{sv}: getpath returned {path}, expected a v3 path'
-    sv_uuid = m.group(1)
+    was_pre_v3 = sv.version in (1, 2)
 
-    link = _admin_sh(st, f'readlink {sv.base}/.meta').strip()
-    assert link == f'.meta.{sv_uuid}', f'{sv}: .meta -> {link}, uuid = {sv_uuid}'
+    if isinstance(sv.helper, SubvolV3Helper):
+        path = sv.helper.getpath()
+    elif sv.version == 3 and sv.helper is None:
+        # native v3, not yet wrapped
+        sv.helper = SubvolV3Helper(st.manager, st.admin, VOLNAME,
+                                   name=sv.name, grp_name=sv.group)
+        sv.base = as_relpath(sv.helper.gen_base_path())
+        path = sv.helper.getpath()
+        sv.helper.set_uuid_from_path(path)
+        if not sv.helper.get_incar(sv.helper.uuid):
+            sv.helper.add_incar(sv.helper.uuid)
+    else:
+        # pre-v3 (V1/V2 helper): getpath triggers auto-upgrade, then wrap
+        if sv.helper is None:
+            _bind_helper(st, sv, sv.version if sv.version in (1, 2) else 2)
+        if sv.data_path:
+            sv.helper.uuid = sv.data_path.rsplit('/', 1)[1]
+            sv.helper._reset_paths()
+        sv.helper.snap_names = list(st.snaps.get(sv.name, []))
+        sv.helper.retained = sv.retained
+        path = sv.helper.getpath()
+        sv.helper.set_uuid_from_path(path)
+        sv.helper = SubvolV3Helper(subvol=sv.helper)
 
-    meta = _read_meta(st, sv)
-    glob = dict(meta.items('GLOBAL'))
-    log.info(f'{sv}: v3 meta = {glob}')
-    assert glob.get('version') == '3', f'{sv}: meta = {glob}'
-    assert glob.get('path') == path, f'{sv}: meta = {glob}'
-    assert glob.get('state') == 'complete', f'{sv}: meta = {glob}'
+    sv.helper.verify_uuid()
+    sv.helper.verify_layout()
+    sv.helper.verify_meta_file()
+    sv.helper.verify_subvol_getpath_cmd()
+    assert path == sv.helper.gen_mnt_path(), \
+        f'{sv}: getpath {path} != {sv.helper.gen_mnt_path()}'
 
-    if sv.data_path:
+    sv_uuid = sv.helper.uuid
+    if was_pre_v3 and sv.data_path:
         old_uuid = sv.data_path.rsplit('/', 1)[1]
         assert sv_uuid == old_uuid, f'{sv}: uuid changed {old_uuid} -> {sv_uuid}'
         old_dir = _admin_sh(st, f'test -e {sv.data_path} && echo yes || echo no').strip()
         assert old_dir == 'no', \
             f'{sv}: v{sv.version} data dir {sv.data_path} still exists'
-    return path.lstrip('/')
+    return as_relpath(path)
 
 
 def _assert_usable(st, sv):
@@ -731,27 +788,36 @@ def _assert_clone_attrs(st, c, src):
 
 
 def _pre_v3_snap_path(sv, snap, upgraded=False):
-    sv_uuid = sv.data_path.rsplit('/', 1)[1]
-    if sv.version == 1:
-        # v1 snapshots are taken in the data (uuid) dir, and move along with
-        # it on auto-upgrade
-        if upgraded:
-            return f'{sv.base}/roots/{sv_uuid}/mnt/.snap/{snap}'
-        return f'{sv.data_path}/.snap/{snap}'
-    # v2 snapshots are taken a level above the data dir, and stay there
-    return f'{sv.base}/.snap/{snap}/{sv_uuid}'
+    """
+    Path of a pre-v3 snapshot relative to the fs root.
+    """
+    if upgraded and isinstance(sv.helper, SubvolV3Helper):
+        if sv.version == 1:
+            return as_relpath(sv.helper.gen_v1_snap_path(snap))
+        return as_relpath(sv.helper.gen_v2_snap_data_path(snap))
+    sv_uuid = (sv.helper.uuid if sv.helper and sv.helper.uuid
+               else sv.data_path.rsplit('/', 1)[1])
+    base = sv.base or as_relpath(sv.helper.gen_base_path())
+    return as_relpath(subvol_pre_v3_snap_path(
+        sv.version, base, sv_uuid, snap, upgraded=upgraded))
 
 
 def _snap_create(st, sv, snap, pre_v3=False, direct=False):
     """
     Snapshot the subvolume through ceph-mgr, or directly (pre_v3 only), the
-    way ceph-mgr would have.
+    way ceph-mgr would have. Direct v1 snaps use SubvolV1Helper.custom_create_snap
+    (mksnap, not via mgr) so the old mgr does not upgrade v1 -> v2.
     """
+    if sv.helper is None:
+        _bind_helper(st, sv, sv.version)
     if direct:
-        assert pre_v3
-        _admin_sh(st, f'mkdir {_pre_v3_snap_path(sv, snap)}')
+        assert pre_v3 and isinstance(sv.helper, SubvolV1Helper)
+        sv.helper.custom_create_snap(snap)
+    elif isinstance(sv.helper, SubvolV3Helper):
+        sv.helper.snap_create(snap)
     else:
-        _ceph(st, f'fs subvolume snapshot create {VOLNAME} {sv.name} {snap}{sv.grp_arg}')
+        # SubvolV1/V2Helper.snap_create tracks helper.snap_names
+        sv.helper.snap_create(snap)
     st.snaps.setdefault(sv.name, set()).add(snap)
     if pre_v3:
         path = _pre_v3_snap_path(sv, snap)
@@ -798,15 +864,20 @@ def _assert_snap_getpath(st, sv, snap, upgraded):
     with --retain-snapshots are after auto-upgrade is unspecified, so that
     path is only logged.
     """
-    _, out = _ceph(st, f'fs subvolume snapshot getpath {VOLNAME} {sv.name} '
-                       f'{snap}{sv.grp_arg}')
-    path = out.strip()
+    if sv.helper is not None:
+        path = sv.helper.snap_getpath(snap)
+    else:
+        _, out = _ceph(st, f'fs subvolume snapshot getpath {VOLNAME} {sv.name} '
+                           f'{snap}{sv.grp_arg}')
+        path = out.strip()
     if sv.retained and upgraded:
         log.info(f'{sv}: snapshot {snap} getpath returned {path}')
     else:
         expected = f'/{_pre_v3_snap_path(sv, snap, upgraded)}'
         assert path == expected, \
             f'{sv}: snapshot {snap} getpath returned {path}, expected {expected}'
+        if upgraded and isinstance(sv.helper, SubvolV3Helper):
+            sv.helper.verify_snap_getpath_cmd(snap, version=sv.version)
     assert _manifest(st, path.lstrip('/')) == st.snap_manifests[(sv.name, snap)], \
         f'{sv}: data at {path} does not match snapshot {snap}'
 
@@ -1189,9 +1260,12 @@ def _setup_clones(st):
 def _register_clone(st, c, src, snap):
     """
     Record a clone (issued with snapshot_clone_delay set) to be held pending
-    through the upgrade.
+    through the upgrade. Clones are always v2 (as the old ceph-mgr creates them).
     """
+    h = _bind_helper(st, c, 2)
     c.data_path = _read_meta(st, c).get('GLOBAL', 'path').lstrip('/')
+    h.uuid = c.data_path.rsplit('/', 1)[1]
+    h._reset_paths()
     assert _clone_state(st, c) == 'pending'
     st.clones.append(c)
     st.clone_of[c.name] = (src, snap)
@@ -1225,21 +1299,23 @@ def _setup_purges(st):
     for sv in st.purges:
         if sv.group:
             _ceph(st, f'fs subvolumegroup create {VOLNAME} {sv.group}')
-        _ceph(st, f'fs subvolume create {VOLNAME} {sv.name}{sv.grp_arg}')
-        _, path = _getpath(st, sv)
-        sv.data_path = path.lstrip('/')
+        h = _bind_helper(st, sv, 2)
+        h.create(default_mode=False)
+        path = h.getpath()
+        h.set_uuid_from_path(path)
+        sv.data_path = as_relpath(path)
         _populate(st, sv.data_path, st.purge_files)
     _create_retained(st, st.retained[1], st.purge_files)
 
     _set_purging_paused(st, True)
     for sv in st.purges:
-        _ceph(st, f'fs subvolume rm {VOLNAME} {sv.name}{sv.grp_arg}')
+        sv.helper.rm()
     # moves their data dirs (but not their snapshots) to the trash; the
     # (first) one has a clone of its snapshot pending
     for sv in st.retained:
-        _ceph(st, f'fs subvolume rm {VOLNAME} {sv.name}{sv.grp_arg} '
-                  '--retain-snapshots')
+        sv.helper.rm('--retain-snapshots')
         sv.retained = True
+        sv.helper.retained = True
         _assert_retained_pre_v3(st, sv)
     total = _count_files(st, TRASH_DIR)
     assert _trash_entries(st) == len(st.purges) + len(st.retained)
@@ -1263,8 +1339,11 @@ def _create_retained(st, sv, nfiles):
     """
     if sv.group:
         _ceph(st, f'fs subvolumegroup create {VOLNAME} {sv.group}')
-    _ceph(st, f'fs subvolume create {VOLNAME} {sv.name}{sv.grp_arg}')
-    sv.data_path = _getpath(st, sv)[1].lstrip('/')
+    h = _bind_helper(st, sv, 2)
+    h.create(default_mode=False)
+    path = h.getpath()
+    h.set_uuid_from_path(path)
+    sv.data_path = as_relpath(path)
     _populate(st, sv.data_path, nfiles)
     _pre_v3_snap_create(st, sv, SNAPNAME)
     _record_snap_info(st, sv)
@@ -1289,13 +1368,14 @@ def _assert_retained_pre_v3(st, sv):
     The subvolume, removed with --retain-snapshots, is still v2 (its data dir
     gone, its snapshots in place), and is reported as such.
     """
-    ftype = _admin_sh(st, f'stat -c %F {sv.base}/.meta').strip()
+    base = _sv_base(sv)
+    ftype = _admin_sh(st, f'stat -c %F {base}/.meta').strip()
     assert ftype == 'regular file', f'{sv}: .meta is a {ftype}'
     glob = dict(_read_meta(st, sv).items('GLOBAL'))
     assert (glob.get('version'), glob.get('state'), glob.get('path')) == \
         ('2', STATE_RETAINED, ''), f'{sv}: meta = {glob}'
     out = _admin_sh(st, f'test -e {sv.data_path} && echo yes || echo no; '
-                        f'test -e {sv.base}/roots && echo yes || echo no')
+                        f'test -e {base}/roots && echo yes || echo no')
     assert out.split() == ['no', 'no'], \
         f'{sv}: data dir, roots dir present?: {out.split()}'
     for snap in st.snaps[sv.name]:
@@ -1330,13 +1410,9 @@ def _verify_retained(st, sv, clone=None):
 
 
 def _authorize(st, sv, auth_id):
-    _ceph(st, f'fs subvolume authorize {VOLNAME} {sv.name} {auth_id}'
-              f'{sv.grp_arg} --access_level rw')
-    # kernel clients may not support the default key type of newer
-    # releases; same as the kclient task.
-    _ceph(st, f'auth rotate client.{auth_id} --key-type=aes', check_status=False)
-    _, keyring = _ceph(st, f'auth get client.{auth_id}')
-    return keyring
+    if sv.helper is None:
+        _bind_helper(st, sv, sv.version)
+    return sv.helper.authorize(auth_id, access_level='rw', rotate_aes=True)
 
 
 def _add_data_pool(st):
@@ -1377,48 +1453,11 @@ def _data_pool(st):
     return _admin_sh(st, 'getfattr --only-values -n ceph.dir.layout.pool .').strip()
 
 
-def _create_v1(st, sv):
-    """
-    Create a v1 subvolume in the layout ceph-mgr used to (see
-    SubvolumeV1.create()): data in <subvolume>/<uuid> (with the pool layout
-    set on it), and a .meta file (version 1) in <subvolume>. It gets the
-    attributes of its profile the way ceph-mgr would set them (`fs subvolume
-    create` options, `fs subvolume metadata set`), and is marked a subvolume
-    (on its data dir, see SubvolumeV1.mark_subvolume()).
-    """
-    sv.version = 1
-    sv.data_path = f'{sv.base}/{uuid.uuid4()}'
-    cmds = ['set -e',
-            f'mkdir -p -m 755 {sv.data_path}',
-            # ceph-mgr sets the pool layout (the --pool_layout or the
-            # inherited one) on the data dir regardless
-            f'setfattr -n ceph.dir.layout.pool -v {sv.pool} {sv.data_path}',
-            f'setfattr -n ceph.dir.subvolume -v 1 {sv.data_path}']
-    if sv.has('namespace'):
-        # as ceph-mgr names it (SubvolumeBase.namespace)
-        sv.namespace = f'fsvolumens__{sv.group or "_nogroup"}_{sv.name}'
-        cmds.append('setfattr -n ceph.dir.layout.pool_namespace '
-                    f'-v {sv.namespace} {sv.data_path}')
-    if sv.has('size'):
-        cmds.append(f'setfattr -n ceph.quota.max_bytes -v {SV_SIZE} {sv.data_path}')
-    if sv.has('earmark'):
-        cmds.append(f'setfattr -n {EARMARK_XATTR} -v {SV_EARMARK} {sv.data_path}')
-    meta = (f'[GLOBAL]\\nversion = 1\\ntype = subvolume\\n'
-            f'path = /{sv.data_path}\\nstate = complete\\n')
-    if sv.has('metadata'):
-        meta += ('\\n[USER_METADATA]\\n' +
-                 ''.join(f'{k} = {v}\\n' for k, v in SV_METADATA.items()))
-    cmds += [f'chown {sv.uid}:{sv.gid} {sv.data_path}',
-             f'chmod {sv.mode:o} {sv.data_path}',
-             f'printf "{meta}" > {sv.base}/.meta']
-    _admin_sh(st, '\n'.join(cmds))
-    log.info(f'{sv}: created v1 subvolume at {sv.data_path}:\n'
-             f'{_admin_sh(st, f"cat {sv.base}/.meta")}')
-
-
 def _create_pre_v3(st, sv):
     """
-    Create a v1/v2 subvolume with the attributes of its profile.
+    Create a v1/v2 subvolume with the attributes of its profile, using
+    SubvolV1Helper / SubvolV2Helper. Suite profile mapping stays here; layout
+    and create ops go through the helper.
     """
     in_attr_group = sv.has('group')
     if sv.group:
@@ -1434,27 +1473,49 @@ def _create_pre_v3(st, sv):
     log.info(f'{sv}: creating v{st.version} subvolume with profile '
              f'{sv.profile} {sorted(sv.attrs)}')
     if st.version == 1:
-        _create_v1(st, sv)
+        # Fabricate via SubvolV1Helper.custom_create (old SubvolumeV1.create
+        # layout); cannot use mgr create on a release that still auto-upgrades
+        # v1 -> v2 on open.
+        h = _bind_helper(st, sv, 1)
+        create_options = ''
+        if sv.has('size'):
+            create_options += f' --size {SV_SIZE}'
+        if sv.has('namespace'):
+            create_options += ' --namespace-isolated'
+            sv.namespace = subvol_pool_namespace(sv.name, sv.group)
+        h.custom_create(
+            create_options,
+            pool=sv.pool,
+            uid=sv.uid, gid=sv.gid, mode=sv.mode,
+            earmark=SV_EARMARK if sv.has('earmark') else None,
+            metadata=SV_METADATA if sv.has('metadata') else None,
+            populate_files=False)
+        sv.data_path = as_relpath(h.gen_mnt_path())
+        log.info(f'{sv}: created v1 subvolume at {sv.data_path}:\n'
+                 f'{_admin_sh(st, f"cat {sv.base}/.meta")}')
     else:
-        opts = ''
+        h = _bind_helper(st, sv, 2)
+        opts = f' --mode {sv.mode:o}'
         if sv.has('size'):
             opts += f' --size {SV_SIZE}'
         if sv.has('owner'):
             opts += f' --uid {SV_UID} --gid {SV_GID}'
-        if sv.has('mode'):
-            opts += f' --mode {SV_MODE:o}'
         if sv.has('namespace'):
             opts += ' --namespace-isolated'
         if sv.has('earmark'):
             opts += f' --earmark {SV_EARMARK}'
         if sv.has('pool'):
             opts += f' --pool_layout {DATA_POOL_2}'
-        _ceph(st, f'fs subvolume create {VOLNAME} {sv.name}{sv.grp_arg}{opts}')
+        # default_mode=False: we always pass --mode (mgr default is 0755,
+        # not the helper unittest default of 0777)
+        h.create(opts, default_mode=False)
         if sv.has('metadata'):
             for k, v in SV_METADATA.items():
                 _ceph(st, f'fs subvolume metadata set {VOLNAME} {sv.name} {k} {v}'
                           f'{sv.grp_arg}')
-        sv.data_path = _getpath(st, sv)[1].lstrip('/')
+        path = h.getpath()
+        h.set_uuid_from_path(path)
+        sv.data_path = as_relpath(path)
         if sv.has('namespace'):
             sv.namespace = _admin_sh(
                 st, 'getfattr --only-values -n ceph.dir.layout.pool_namespace '
@@ -1468,16 +1529,12 @@ def _create_pre_v3(st, sv):
 
 
 def _pre_v3_authorize(st, sv, auth_id):
+    if sv.helper is None:
+        _bind_helper(st, sv, sv.version)
     if st.version == 2:
         return _authorize(st, sv, auth_id)
-    # same caps as `fs subvolume authorize` (on a v1 subvolume) gives
-    namespace = f' namespace={sv.namespace}' if sv.namespace else ''
-    _ceph(st, f'auth get-or-create client.{auth_id} mon "allow r" '
-              f'mds "allow rw path=/{sv.data_path}" '
-              f'osd "allow rw pool={sv.pool}{namespace}"')
-    _ceph(st, f'auth rotate client.{auth_id} --key-type=aes', check_status=False)
-    _, keyring = _ceph(st, f'auth get client.{auth_id}')
-    return keyring
+    return sv.helper.custom_subvol_auth(
+        auth_id, sv.pool, namespace=sv.namespace, rotate_aes=True)
 
 
 def _pre_v3_snap_create(st, sv, snap):
@@ -1694,7 +1751,11 @@ def post_upgrade(ctx, config):
     # where the upgraded subvolumes are marked as such must be the same as
     # for a subvolume created as v3
     fresh = Subvol('sv_fresh_v3', 'grp_io')
-    _ceph(st, f'fs subvolume create {VOLNAME} {fresh.name}{fresh.grp_arg}')
+    fresh.helper = SubvolV3Helper(st.manager, st.admin, VOLNAME,
+                                  name=fresh.name, grp_name=fresh.group)
+    fresh.helper.create(default_mode=False)
+    fresh.base = as_relpath(fresh.helper.gen_base_path())
+    fresh.version = 3
     fresh_path = _assert_v3(st, fresh)
     _admin_sh(st, f'touch {fresh_path}/{BOUNDARY_FILE}')
     expected = _probe_boundary(st, fresh, fresh_path)
@@ -1720,6 +1781,8 @@ def post_upgrade(ctx, config):
                          (Subvol('sv_clone_post_2', 'grp_clone'), io_src, io_snap)]:
         _clone(st, src, snap, c)
         _wait_for_clone(st, c)
+        # clones issued after the full upgrade are created as v3
+        c.version = 3
         _assert_clone_data(st, c, src, snap, path=_assert_v3(st, c))
         _assert_clone_attrs(st, c, src)
     for snap in (SNAPNAME, SNAPNAME_2):
