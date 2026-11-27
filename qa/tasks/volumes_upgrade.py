@@ -68,7 +68,7 @@ CLONE_DELAY = 86400
 # default) ceph-mgr rejects a clone (EAGAIN) once as many clones as there are
 # cloner threads are pending.
 MAX_CONCURRENT_CLONES = 8
-STATE_KEY = 'volumes-upgrade-state'
+#STATE_KEY = 'volumes-upgrade-state'
 
 # (name, group) of the subvolumes this task creates
 IO_SUBVOLS = [('sv_io_0', None), ('sv_io_1', None), ('sv_io_2', 'grp_io')]
@@ -308,51 +308,6 @@ class Subvol:
 
 class State:
     def __init__(self, ctx, config):
-        self.manager = ctx.managers['ceph']
-        self.admin = _get_mount(ctx, config.get('admin_client', 'client.3'))
-        self.io_mounts = [_get_mount(ctx, c) for c in
-                          config.get('io_clients',
-                                     ['client.0', 'client.1', 'client.2'])]
-        assert len(self.io_mounts) == len(IO_SUBVOLS)
-        # version of the (non-clone, non-purged) subvolumes before upgrade
-        self.version = int(config.get('version', 2))
-        assert self.version in (1, 2), f'unsupported version {self.version}'
-        self.testdir = misc.get_testdir(ctx)
-
-        self.io_svs = [Subvol(*s) for s in IO_SUBVOLS]
-        self.src = Subvol(*CLONE_SRC)
-        self.attr_svs = _assign_profiles(config, self.io_svs + [self.src])
-        # group name -> `fs subvolumegroup info` by the old ceph-mgr, of each
-        # group created with GRP_* attributes
-        self.groups = {}
-        # clones pending through the upgrade
-        self.clones = [Subvol(*s) for s in CLONES]
-        # clone name -> (source subvolume, snapshot) of each of self.clones
-        self.clone_of = {c.name: (self.src, SNAPNAME) for c in self.clones}
-        self.purges = [Subvol(*s) for s in PURGES]
-        # subvolumes removed with --retain-snapshots: a clone source and a
-        # purge
-        self.retained = [Subvol(*RETAINED_CLONE_SRC), Subvol(*RETAINED_PURGE)]
-
-        self.clone_src_files = config.get('clone_src_files', 5000)
-        self.purge_files = config.get('purge_files', 5000)
-        # subvolume name -> names of snapshots it is expected to have
-        self.snaps = {}
-        # (subvolume name, snapshot name) -> manifest of the snapshot's data
-        self.snap_manifests = {}
-        # clones issued after setup: (clone, source, snapshot)
-        self.late_clones = []
-        # one RemoteIoLoad per io_svs (with .sv set)
-        self.writers = []
-        # (subvolume name, snapshot name) -> `fs subvolume snapshot info` by
-        # the old ceph-mgr
-        self.snap_info = {}
-        # subvolume name -> dict(auth_id, keyring, mnt, root) of an auth ID
-        # authorized by the old ceph-mgr for an extra (ceph-fuse) session
-        # mounted at the pre-v3 data dir, for checking authorized_list,
-        # deauthorize and evict after auto-upgrade
-        self.evict = {}
-
     @property
     def pre_v3_svs(self):
         """
@@ -424,11 +379,6 @@ def _state(ctx):
     return ctx[STATE_KEY]
 
 
-def _ceph(st, cmd, check_status=True):
-    p = st.manager.ceph(cmd, check_status=check_status)
-    return p.exitstatus, p.stdout.getvalue()
-
-
 def _admin_sh(st, payload, timeout=900):
     """
     Run payload as root via bash, from the root of the admin mount. The
@@ -446,14 +396,9 @@ def _wait_for(desc, pred, timeout, sleep=5):
                 return
 
 
-def _set_mgr_config(st, name, value):
-    _ceph(st, f'config set mgr mgr/volumes/{name} {value}')
-    # config_notify() is asynchronous
-    time.sleep(5)
-
-
 def _set_purging_paused(st, paused):
-    _set_mgr_config(st, 'pause_purging', str(paused).lower())
+    run_ceph_cmd('config set mgr mgr/volumes/pause_purging '
+                 f'{str(paused).lower()}')
 
 
 def _count_files(st, path):
@@ -1008,11 +953,12 @@ def _sessions(st, auth_id):
     """
     Return the roots of the sessions of auth_id across all active ranks.
     """
-    _, out = _ceph(st, f'fs get {VOLNAME} --format=json')
+    out = get_ceph_cmd_stdout(st, f'fs get {VOLNAME} --format=json')
     max_mds = json.loads(out)['mdsmap']['max_mds']
     roots = []
     for rank in range(max_mds):
-        _, out = _ceph(st, f'tell mds.{VOLNAME}:{rank} client ls --format=json')
+        out = get_ceph_cmd_stdout(f'tell mds.{VOLNAME}:{rank} client ls '
+                                  '--format=json')
         for session in json.loads(out):
             md = session.get('client_metadata', {})
             if md.get('entity_id') == auth_id:
@@ -1061,11 +1007,12 @@ def _fuse_umount(st, mnt, auth_id=None):
 
 
 def _evict_sessions(st, auth_id):
-    rc, out = _ceph(st, f'fs get {VOLNAME} --format=json', check_status=False)
-    max_mds = json.loads(out)['mdsmap']['max_mds'] if rc == 0 else 1
+    out = get_ceph_cmd_stdout(f'fs get {VOLNAME} --format=json',
+                               stdout=StringIO())
+    max_mds = json.loads(out)['mdsmap']['max_mds']
     for rank in range(max_mds):
-        _ceph(st, f'tell mds.{VOLNAME}:{rank} client evict '
-                  f'client_metadata.entity_id={auth_id}', check_status=False)
+        run_ceph_cmd(f'tell mds.{VOLNAME}:{rank} client evict '
+                     f'client_metadata.entity_id={auth_id}', check_status=False)
 
 
 def _cleanup_evict_mounts(st):
@@ -1119,12 +1066,11 @@ def _verify_deauthorize_evict(st, i, path):
     sv.ensure_bound(st).deauthorize(auth_id)
     ids = _authorized_ids(st, sv)
     assert auth_id not in ids, f'{sv}: {auth_id} still in authorized_list {ids}'
-    rc, out = _ceph(st, f'auth get client.{auth_id} --format=json', check_status=False)
-    if rc == 0:
-        mds_caps = json.loads(out)[0]['caps'].get('mds', '')
-        for p in (e['root'], path):
-            assert f'path=/{p}' not in mds_caps, \
-                f'{sv}: deauthorized {auth_id} has caps for /{p}: {mds_caps}'
+    out = get_ceph_cmd_stdout(st, f'auth get client.{auth_id} --format=json')
+    mds_caps = json.loads(out)[0]['caps'].get('mds', '')
+    for p in (e['root'], path):
+        assert f'path=/{p}' not in mds_caps, \
+            f'{sv}: deauthorized {auth_id} has caps for /{p}: {mds_caps}'
 
     sv.evict(auth_id)
     _wait_for(f'sessions of {auth_id} to be evicted',
@@ -1197,8 +1143,9 @@ def _setup_clones(st):
     # delay (with the clones pending) until it gets upgraded. the delay is
     # reset at the end of setup (by then, the clones have long been picked
     # up), so that the new ceph-mgr starts them right away.
-    _set_mgr_config(st, 'max_concurrent_clones', MAX_CONCURRENT_CLONES)
-    _set_mgr_config(st, 'snapshot_clone_delay', CLONE_DELAY)
+    run_ceph_cmd('config set mgr mgr/volumes/max_concurrent_clones',
+                 MAX_CONCURRENT_CLONES)
+    run_ceph_cmd('config set mgr mgr/volumes/snapshot_clone_delay', CLONE_DELAY)
     clones, st.clones = st.clones, []
     for c in clones:
         _clone(st, sv, SNAPNAME, c)
@@ -1368,15 +1315,6 @@ def _verify_retained(st, sv, clone=None):
     assert sv.name not in names, f'{sv}: still listed: {names}'
 
 
-def _add_data_pool(st):
-    """
-    Add a data pool to the volume, for the subvolumes (and the group) with a
-    non-default data pool.
-    """
-    _ceph(st, f'osd pool create {DATA_POOL_2}')
-    _ceph(st, f'fs add_data_pool {VOLNAME} {DATA_POOL_2}')
-
-
 def _setup_io(st):
     for i, (mount, sv) in enumerate(zip(st.io_mounts, st.io_svs)):
         _create_pre_v3(st, sv)
@@ -1544,7 +1482,9 @@ def _setup(st):
     or v2 (fs subvolume create) subvolumes with attribute profiles, start
     writers, hold clones pending, pause purges mid-way.
     """
-    _add_data_pool(st)
+    run_ceph_cmd(f'osd pool create {DATA_POOL_2}')
+    run_ceph_cmd(f'fs add_data_pool {VOLNAME} {DATA_POOL_2}')
+
     _setup_io(st)
     _setup_evict(st)
     _setup_clones(st)
@@ -1554,7 +1494,7 @@ def _setup(st):
     _assert_clones_pending(st)
     for src, snap in set(st.clone_of.values()):
         _assert_pending_clones(st, src, snap, 'yes')
-    _set_mgr_config(st, 'snapshot_clone_delay', 0)
+    run_ceph_cmd('config set mgr mgr/volumes/snapshot_clone_delay 0')
 
     for sv in st.pre_v3_svs:
         _record_fs_attrs(st, sv)
@@ -1594,8 +1534,66 @@ def task(ctx, config):
     DEFAULT_SUBVOLUMES; override via overrides: volumes_upgrade.
     """
     config = _merge_config(ctx, config)
-    st = State(ctx, config)
-    ctx[STATE_KEY] = st
+
+    self.manager = ctx.managers['ceph']
+    self.admin = _get_mount(ctx, config.get('admin_client', 'client.3'))
+    self.io_mounts = [_get_mount(ctx, c) for c in
+                      config.get('io_clients',
+                                 ['client.0', 'client.1', 'client.2'])]
+    assert len(self.io_mounts) == len(IO_SUBVOLS)
+    # version of the (non-clone, non-purged) subvolumes before upgrade
+    self.version = int(config.get('version', 2))
+    assert self.version in (1, 2), f'unsupported version {self.version}'
+    self.testdir = misc.get_testdir(ctx)
+
+    if self.version == 1:
+        self.io_svs = [SubvolV1Helper(*s) for s in IO_SUBVOLS]
+        self.clones = [SubvolV1Helper(*s) for s in CLONES]
+        self.purges = [SubvolV1Helper(*s) for s in PURGES]
+        self.retained = [SubvolV2Helper(*RETAINED_CLONE_SRC), SubvolV2Helper(*RETAINED_PURGE)]
+        self.src = SubvolV1Helper(*CLONE_SRC)
+    elif self.version == 2:
+        self.io_svs = [SubvolV2Helper(*s) for s in IO_SUBVOLS]
+        self.clones = [SubvolV2Helper(*s) for s in CLONES]
+        self.purges = [SubvolV2Helper(*s) for s in PURGES]
+        self.retained = [SubvolV2Helper(*RETAINED_CLONE_SRC), SubvolV2Helper(*RETAINED_PURGE)]
+        self.src = SubvolV2Helper(*CLONE_SRC)
+    else:
+        assert False
+
+    # TODO: what is src about?
+
+    self.attr_svs = _assign_profiles(config, self.io_svs + [self.src])
+    # group name -> `fs subvolumegroup info` by the old ceph-mgr, of each
+    # group created with GRP_* attributes
+    self.groups = {}
+    # clones pending through the upgrade
+    # clone name -> (source subvolume, snapshot) of each of self.clones
+    self.clone_of = {c.name: (self.src, SNAPNAME) for c in self.clones}
+    # subvolumes removed with --retain-snapshots: a clone source and a
+    # purge
+
+    self.clone_src_files = config.get('clone_src_files', 5000)
+    self.purge_files = config.get('purge_files', 5000)
+    # subvolume name -> names of snapshots it is expected to have
+    self.snaps = {}
+    # (subvolume name, snapshot name) -> manifest of the snapshot's data
+    self.snap_manifests = {}
+    # clones issued after setup: (clone, source, snapshot)
+    self.late_clones = []
+    # one RemoteIoLoad per io_svs (with .sv set)
+    self.writers = []
+    # (subvolume name, snapshot name) -> `fs subvolume snapshot info` by
+    # the old ceph-mgr
+    self.snap_info = {}
+    # subvolume name -> dict(auth_id, keyring, mnt, root) of an auth ID
+    # authorized by the old ceph-mgr for an extra (ceph-fuse) session
+    # mounted at the pre-v3 data dir, for checking authorized_list,
+    # deauthorize and evict after auto-upgrade
+    self.evict = {}
+
+
+    #ctx[STATE_KEY] = st
     try:
         _setup(st)
         yield
@@ -1763,7 +1761,7 @@ def _post_upgrade(st):
 
         auth_id = f'svio{i}new'
         keyring = sv.authorize(auth_id, access_level='rw', rotate_aes=True)
-        _, out = _ceph(st, f'auth get client.{auth_id} --format=json')
+        out = get_ceph_cmd_stdout(f'auth get client.{auth_id} --format=json')
         mds_caps = json.loads(out)[0]['caps']['mds']
         assert f'path=/{path}' in mds_caps, \
             f'{sv}: caps of client.{auth_id} not for the v3 path: {mds_caps}'
