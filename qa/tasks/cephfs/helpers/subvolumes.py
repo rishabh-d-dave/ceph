@@ -263,12 +263,48 @@ class SubvolOpsHelper(RunCephCmd):
 
         return self.get_ceph_cmd_stdout(cmd).strip()
 
+    def try_getpath(self, volname, subvol_name, grp_name=None):
+        """
+        Like getpath, but returns (exitstatus, path_or_empty) without raising.
+        """
+        from io import StringIO
+        cmd = f'fs subvolume getpath {volname} {subvol_name}'
+        if grp_name:
+            cmd += f' --group-name {grp_name}'
+        p = self.run_ceph_cmd(args=cmd, check_status=False, stdout=StringIO())
+        return p.exitstatus, p.stdout.getvalue().strip()
+
+    def info(self, volname, subvol_name, grp_name=None):
+        cmd = f'fs subvolume info {volname} {subvol_name}'
+        if grp_name:
+            cmd += f' --group-name {grp_name}'
+        return loads(self.get_ceph_cmd_stdout(cmd))
+
+    def exists(self, volname, subvol_name, grp_name=None):
+        cmd = f'fs subvolume info {volname} {subvol_name}'
+        if grp_name:
+            cmd += f' --group-name {grp_name}'
+        return self.get_ceph_cmd_result(args=cmd, check_status=False) == 0
+
     def ls(self, volname, grp_name=None):
         cmd = f'fs subvolume ls {volname}'
         if grp_name:
             cmd += f' --group-name {grp_name}'
 
         return loads(self.get_ceph_cmd_stdout(cmd))
+
+    def metadata_ls(self, volname, subvol_name, grp_name=None):
+        cmd = f'fs subvolume metadata ls {volname} {subvol_name}'
+        if grp_name:
+            cmd += f' --group-name {grp_name}'
+        return loads(self.get_ceph_cmd_stdout(cmd))
+
+    def metadata_set(self, volname, subvol_name, key, value, grp_name=None):
+        cmd = (f'fs subvolume metadata set {volname} {subvol_name} '
+               f'{key} {value}')
+        if grp_name:
+            cmd += f' --group-name {grp_name}'
+        return self.run_ceph_cmd(cmd)
 
     def auth(self, volname, subvol_name, client_id, grp_name=None,
              access_level=None):
@@ -279,6 +315,25 @@ class SubvolOpsHelper(RunCephCmd):
             cmd += f' --access_level {access_level}'
 
         self.run_ceph_cmd(cmd)
+
+    def authorized_list(self, volname, subvol_name, grp_name=None):
+        cmd = f'fs subvolume authorized_list {volname} {subvol_name}'
+        if grp_name:
+            cmd += f' --group-name {grp_name}'
+        return loads(self.get_ceph_cmd_stdout(cmd))
+
+    def deauthorize(self, volname, subvol_name, client_id, grp_name=None):
+        cmd = (f'fs subvolume deauthorize {volname} {subvol_name} '
+               f'{client_id}')
+        if grp_name:
+            cmd += f' --group-name {grp_name}'
+        return self.run_ceph_cmd(cmd)
+
+    def evict(self, volname, subvol_name, client_id, grp_name=None):
+        cmd = f'fs subvolume evict {volname} {subvol_name} {client_id}'
+        if grp_name:
+            cmd += f' --group-name {grp_name}'
+        return self.run_ceph_cmd(cmd)
 
     def auth_get(self, client_id):
         if not client_id.startswith('client.'):
@@ -332,6 +387,54 @@ class SubvolOpsHelper(RunCephCmd):
             cmd += f' --group-name {grp_name}'
 
         return loads(self.get_ceph_cmd_stdout(cmd))
+
+    def snap_info(self, volname, subvol_name, snap_name, grp_name=None):
+        cmd = (f'fs subvolume snapshot info {volname} {subvol_name} '
+               f'{snap_name}')
+        if grp_name:
+            cmd += f' --group-name {grp_name}'
+        return loads(self.get_ceph_cmd_stdout(cmd))
+
+    def snap_metadata_ls(self, volname, subvol_name, snap_name, grp_name=None):
+        cmd = (f'fs subvolume snapshot metadata ls {volname} {subvol_name} '
+               f'{snap_name}')
+        if grp_name:
+            cmd += f' --group-name {grp_name}'
+        return loads(self.get_ceph_cmd_stdout(cmd))
+
+    def snap_metadata_set(self, volname, subvol_name, snap_name, key, value,
+                          grp_name=None):
+        cmd = (f'fs subvolume snapshot metadata set {volname} {subvol_name} '
+               f'{snap_name} {key} {value}')
+        if grp_name:
+            cmd += f' --group-name {grp_name}'
+        return self.run_ceph_cmd(cmd)
+
+    def snap_clone(self, volname, subvol_name, snap_name, target_name,
+                   grp_name=None, target_grp_name=None):
+        cmd = (f'fs subvolume snapshot clone {volname} {subvol_name} '
+               f'{snap_name} {target_name}')
+        if grp_name:
+            cmd += f' --group-name {grp_name}'
+        if target_grp_name:
+            cmd += f' --target_group_name {target_grp_name}'
+        return self.run_ceph_cmd(cmd)
+
+    def clone_status(self, volname, clone_name, grp_name=None):
+        cmd = f'fs clone status {volname} {clone_name}'
+        if grp_name:
+            cmd += f' --group-name {grp_name}'
+        return loads(self.get_ceph_cmd_stdout(cmd))
+
+    def group_create(self, volname, group, opts=''):
+        cmd = f'fs subvolumegroup create {volname} {group}'
+        if opts:
+            cmd += f' {opts}'
+        return self.run_ceph_cmd(cmd)
+
+    def group_info(self, volname, group):
+        return loads(self.get_ceph_cmd_stdout(
+            f'fs subvolumegroup info {volname} {group}'))
 
 
 class SubvolBase(SubvolOpsHelper):
@@ -423,12 +526,38 @@ class SubvolBase(SubvolOpsHelper):
         return super().getpath(self.volname, self.name, self.grp_name).\
                 strip()
 
+    def try_getpath(self):
+        return super().try_getpath(self.volname, self.name, self.grp_name)
+
+    def info(self):
+        return super().info(self.volname, self.name, self.grp_name)
+
+    def exists(self):
+        return super().exists(self.volname, self.name, self.grp_name)
+
     def ls(self):
         return super().ls(self.volname, self.grp_name)
+
+    def metadata_ls(self):
+        return super().metadata_ls(self.volname, self.name, self.grp_name)
+
+    def metadata_set(self, key, value):
+        return super().metadata_set(self.volname, self.name, key, value,
+                                    self.grp_name)
 
     def auth(self, client_id, access_level=None):
         return super().auth(self.volname, self.name, client_id, self.grp_name,
                             access_level=access_level)
+
+    def authorized_list(self):
+        return super().authorized_list(self.volname, self.name, self.grp_name)
+
+    def deauthorize(self, client_id):
+        return super().deauthorize(self.volname, self.name, client_id,
+                                   self.grp_name)
+
+    def evict(self, client_id):
+        return super().evict(self.volname, self.name, client_id, self.grp_name)
 
     def authorize(self, client_id, access_level='rw', rotate_aes=True):
         """
@@ -456,6 +585,13 @@ class SubvolBase(SubvolOpsHelper):
         self._reset_paths()
         return self.uuid
 
+    def set_uuid_from_data_path(self, data_path):
+        """Set uuid from a relative/absolute pre-v3 data path (.../<uuid>)."""
+        self.uuid = data_path.rstrip('/').rsplit('/', 1)[1]
+        verify_uuid(self.uuid)
+        self._reset_paths()
+        return self.uuid
+
 
     # ----- helpers for subvol snap ops -----
 
@@ -474,6 +610,31 @@ class SubvolBase(SubvolOpsHelper):
 
     def snap_ls(self):
         return super().snap_ls(self.volname, self.name, self.grp_name)
+
+    def snap_info(self, snap_name):
+        return super().snap_info(self.volname, self.name, snap_name,
+                                 self.grp_name)
+
+    def snap_metadata_ls(self, snap_name):
+        return super().snap_metadata_ls(self.volname, self.name, snap_name,
+                                        self.grp_name)
+
+    def snap_metadata_set(self, snap_name, key, value):
+        return super().snap_metadata_set(self.volname, self.name, snap_name,
+                                         key, value, self.grp_name)
+
+    def snap_clone(self, snap_name, target_name, target_grp_name=None):
+        return super().snap_clone(self.volname, self.name, snap_name,
+                                  target_name, self.grp_name, target_grp_name)
+
+    def clone_status(self):
+        return super().clone_status(self.volname, self.name, self.grp_name)
+
+    def group_create(self, group, opts=''):
+        return super().group_create(self.volname, group, opts)
+
+    def group_info(self, group):
+        return super().group_info(self.volname, group)
 
 
     # ----- helpers for operating on subvol/subvol mnt path -----
@@ -916,24 +1077,24 @@ class SubvolV3Helper(SubvolBase):
         if subvol:
             assert subvol and not (mon_manager or mount or volname or name or
                                    uuid or grp_name or incars or retained)
-            assert type(subvol) in (SubvolV2Helper, SubvolV1Helper)
+            assert isinstance(subvol, (SubvolV2Helper, SubvolV1Helper))
 
             super().__init__(mon_manager=subvol.mon_manager, mount=subvol.mount,
                              volname=subvol.volname, name=subvol.name,
                              uuid=subvol.uuid, grp_name=subvol.grp_name,
                              snap_names=[], retained=subvol.retained)
-            if type(subvol) is SubvolV2Helper:
+            if isinstance(subvol, SubvolV2Helper):
                 self.has_v2_snaps = (subvol.snap_names != [])
                 self.v2_uuid = subvol.uuid if self.has_v2_snaps else None
-
                 self.v1_uuid = None
                 self.has_v1_snaps = False
-            elif type(subvol) is SubvolV1Helper:
+            elif isinstance(subvol, SubvolV1Helper):
                 self.has_v1_snaps = (subvol.snap_names != [])
                 self.v1_uuid = subvol.uuid if self.has_v1_snaps else None
-
                 self.has_v2_snaps = False
                 self.v2_uuid = None
+            else:
+                assert False, f'unexpected pre-v3 helper {type(subvol)}'
 
             self.add_incar(self.uuid, subvol.snap_names, self.retained)
         else:

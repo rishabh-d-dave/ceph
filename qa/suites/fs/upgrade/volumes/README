@@ -1,6 +1,9 @@
 This suite verifies that mgr/volumes' auto-upgrade of pre-v3 (v1 and v2)
 subvolumes to the v3 layout is non-disruptive across a Ceph upgrade. The
-work is done by qa/tasks/volumes_upgrade.py.
+work is done by qa/tasks/volumes_upgrade.py: one `task()` contextmanager
+sets up on the old release, yields while the suite upgrades the cluster,
+then verifies auto-upgrade on exit. The only extra entry point is
+`after_mgr`, used between a mgr-only upgrade and upgrading the rest.
 
 Matrix
 ======
@@ -14,12 +17,9 @@ That's 16 jobs. Clients are fixed (2-client): client.0 and client.2 are
 kernel, client.1 is ceph-fuse, client.3 (kernel) mounts the file system
 root as the admin mount that inspects the on-disk layout.
 
-The subvolume attribute profiles below are not facets. overrides/
-profiles.yaml defines them, and overrides/subvolumes/ assigns them, one
-<subvolume>-<profile>.yaml per subvolume. Every job includes all of these,
-so each job's description shows which subvolume got which profile, and its
-config shows the attributes. Every job creates all the subvolumes, so they
-add no jobs, and a rerun gets the same ones.
+Each job is one fat job: every attribute profile below is exercised in
+the same run (defaults in volumes_upgrade.DEFAULT_PROFILES /
+DEFAULT_SUBVOLUMES). They are not suite facets and add no jobs.
 
 Subvolumes and attribute profiles
 =================================
@@ -27,12 +27,7 @@ Subvolumes and attribute profiles
 Each v1/v2 subvolume (other than clones, purges and the subvolumes removed
 with retained snapshots, which are plain v2) is created with an attribute
 profile. A profile is a list of attributes (see ATTRS in
-qa/tasks/volumes_upgrade.py). Every IO subvolume and the clone source must
-be assigned one. Other subvolumes can be added (named sv_attr_*, without a
-client, snapshots or clones) with a fragment of their own in
-overrides/subvolumes/. The task rejects a config that doesn't follow these
-rules, or a fragment whose name doesn't match the profile it assigns. As
-configured:
+qa/tasks/volumes_upgrade.py). As configured by default:
 
   bare         no attributes, as `fs subvolume create` without options
   full         --size, --uid/--gid, --mode, --namespace-isolated,
@@ -53,24 +48,24 @@ configured:
   sv_attr_0                 partial      -            0
   grp_attr/sv_attr_1        full         -            0
 
-v2 subvolumes are created through `fs subvolume create`. No release that
-can be upgraded from creates v1 subvolumes, so they are fabricated in the
-layout ceph-mgr used to create them in (data and v1 snapshots in
-<subvolume>/<uuid>, .meta with version 1), with the attributes of their
-profile set the way ceph-mgr would set them. The first snapshot of a v1
-subvolume is taken directly in its data dir, and the rest through the old
-ceph-mgr, which must handle it as v1. A v1 subvolume without snapshots is
-not accessed through the old ceph-mgr, which would upgrade it to v2.
+v2 subvolumes are created through `fs subvolume create` (SubvolV2Helper).
+No release that can be upgraded from creates v1 subvolumes, so they are
+fabricated with SubvolV1Helper.custom_create in the layout ceph-mgr used
+to create them in (data and v1 snapshots in <subvolume>/<uuid>, .meta with
+version 1), with the attributes of their profile. The first snapshot of a
+v1 subvolume is taken directly in its data dir, and the rest through the
+old ceph-mgr, which must handle it as v1. A v1 subvolume without snapshots
+is not accessed through the old ceph-mgr, which would upgrade it to v2.
 
-Setup, on the old release
-=========================
+Setup, on the old release (volumes_upgrade task enter)
+======================================================
 
   - Each IO subvolume is mounted by its client with subvolume-scoped
     credentials (`fs subvolume authorize` for v2, the same caps made by hand
-    for v1), and a background writer does IO in it for the rest of the job.
-    It writes 16KiB files (fsync, rename into place), keeps checksums
-    outside CephFS, and periodically re-verifies recent files and does
-    mkdir/rmdir, readdir and stat. Any error (e.g., EACCES or ESTALE when
+    for v1), and a background RemoteIoLoad writer does IO in it for the rest
+    of the job. It writes 16KiB files (fsync, rename into place), keeps
+    checksums outside CephFS, and periodically re-verifies recent files and
+    does mkdir/rmdir, readdir and stat. Any error (e.g., EACCES or ESTALE when
     the data dir moves) fails the job.
   - Snapshots of the IO subvolumes are taken while their clients write, and
     every pre-v3 snapshot gets user metadata.
@@ -121,7 +116,7 @@ Upgrade
 mgr-only (4-upgrade/mgr-only.yaml): only ceph-mgr is upgraded, through a
 staggered `ceph orch upgrade` (--daemon-types mgr). The new
 ceph-mgr can't auto-upgrade, as the old MDS doesn't know the
-ceph.dir.subvolume.prevpath vxattr. verify_mgr_only checks that:
+ceph.dir.subvolume.prevpath vxattr. volumes_upgrade.after_mgr checks that:
 
   - the writers are still making progress
   - every pre-v3 subvolume keeps working as v1/v2 (a v1 one without
@@ -140,14 +135,15 @@ ceph.dir.subvolume.prevpath vxattr. verify_mgr_only checks that:
   - a new clone of a pre-v3 snapshot (snap1 of the clone source) by the new
     ceph-mgr works, with data and attributes as above
 
-The rest of the cluster is then upgraded, and the writers must still be
-making progress.
+The rest of the cluster is then upgraded.
 
-full (4-upgrade/full.yaml): all daemons are upgraded in one go, and the
-writers must still be making progress.
+full (4-upgrade/full.yaml): all daemons are upgraded in one go.
 
-After the upgrade (5-verify.yaml, post_upgrade)
-===============================================
+After the upgrade (volumes_upgrade task exit)
+=============================================
+
+When the volumes_upgrade context exits (after 5-verify's housekeeping),
+post-upgrade verification runs:
 
 Auto-upgrade, with clients doing IO:
 

@@ -1,5 +1,5 @@
 tasks:
-- volumes_upgrade.setup:
+- volumes_upgrade:
     version: 2
     io_clients: [client.0, client.1, client.2]
     admin_client: client.3

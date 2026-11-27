@@ -20,7 +20,7 @@ tasks:
       - ceph versions | jq -e '.mgr | keys' | grep $sha1
       - ceph versions | jq -e '.overall | length == 2'
       - ceph orch ps
-- volumes_upgrade.verify_mgr_only:
+- volumes_upgrade.after_mgr:
 - print: "**** done verifying mgr-only upgrade"
 - cephadm.shell:
     env: [sha1]
@@ -37,5 +37,4 @@ tasks:
       - ceph versions
       - ceph versions | jq -e '.overall | length == 1'
       - ceph versions | jq -e '.overall | keys' | grep $sha1
-- volumes_upgrade.check_io:
 - print: "**** done upgrading rest of the cluster"

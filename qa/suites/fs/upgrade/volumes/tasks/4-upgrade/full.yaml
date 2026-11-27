@@ -1,7 +1,8 @@
 meta:
 - desc: |
    upgrade all daemons in one go; auto-upgrade is first attempted once the
-   whole cluster runs the new release.
+   whole cluster runs the new release. Post-upgrade verification runs when
+   the volumes_upgrade task context exits (after 5-verify).
 
 tasks:
 - sequential: [ignore-auth-warn-cephadm]
@@ -23,5 +24,4 @@ tasks:
       - ceph versions
       - ceph versions | jq -e '.overall | length == 1'
       - ceph versions | jq -e '.overall | keys' | grep $sha1
-- volumes_upgrade.check_io:
 - print: "**** done full upgrade"
