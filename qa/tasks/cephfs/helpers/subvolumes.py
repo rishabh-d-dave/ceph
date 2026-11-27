@@ -46,128 +46,6 @@ def verify_uuid(uuid):
         raise
 
 
-# ----- pure path / layout helpers (no Mount / CephFSTestCase) -----
-#
-# Shared by unittest helpers and the teuthology volumes_upgrade task.
-# base_path may be absolute (/volumes/...) or relative (volumes/...);
-# join() preserves whichever form the caller passes.
-
-
-def subvol_base_path(name, grp_name=None):
-    grp = grp_name if grp_name else DEFAULT_GRP_NAME
-    return join(VOL_BASE_PATH, grp, name)
-
-
-def subvol_pool_namespace(name, grp_name=None):
-    """
-    RADOS namespace as mgr/volumes names it (SubvolumeBase.namespace).
-    """
-    grp = grp_name if grp_name else DEFAULT_GRP_NAME
-    return f'{POOL_NS_PFX}_{grp}_{name}'
-
-
-def as_relpath(path):
-    """Strip a leading slash for paths relative to an fs-root mount cwd."""
-    return path.lstrip('/')
-
-
-def subvol_uuid_path(base_path, uuid):
-    return join(base_path, uuid)
-
-
-def subvol_meta_path(base_path, meta_name=META_FILE_NAME):
-    return join(base_path, meta_name)
-
-
-def subvol_v3_meta_file_name(uuid):
-    return f'.meta.{uuid}'
-
-
-def subvol_v3_mnt_path(base_path, uuid):
-    return join(base_path, INCAR_BASE_DIR, uuid, MNT_DIR)
-
-
-def subvol_v3_retained_path(base_path, uuid):
-    return join(base_path, INCAR_BASE_DIR, uuid, RETAINED_DIR)
-
-
-def subvol_v1_snap_path(base_path, uuid, snap_name, upgraded=False):
-    """
-    Path of a v1 snapshot. Pre-upgrade it lives under the data (uuid) dir;
-    after auto-upgrade it moves with the data dir under roots/<uuid>/mnt.
-    """
-    if upgraded:
-        return join(base_path, INCAR_BASE_DIR, uuid, MNT_DIR,
-                    SNAP_BASE_DIR, snap_name)
-    return join(base_path, uuid, SNAP_BASE_DIR, snap_name)
-
-
-def subvol_v2_snap_data_path(base_path, uuid, snap_name):
-    """
-    Path of a v2 snapshot's data. Taken a level above the data dir and stays
-    there across auto-upgrade.
-    """
-    return join(base_path, SNAP_BASE_DIR, snap_name, uuid)
-
-
-def subvol_pre_v3_snap_path(version, base_path, uuid, snap_name,
-                            upgraded=False):
-    if version == 1:
-        return subvol_v1_snap_path(base_path, uuid, snap_name, upgraded)
-    if version == 2:
-        return subvol_v2_snap_data_path(base_path, uuid, snap_name)
-    raise ValueError(f'unsupported pre-v3 version {version}')
-
-
-def gen_pre_v3_meta(version, mnt_path, state='complete', metadata=None):
-    """
-    Contents of a pre-v3 .meta file. mnt_path should be the absolute path
-    stored in GLOBAL.path (leading slash).
-    """
-    if not mnt_path.startswith('/'):
-        mnt_path = '/' + mnt_path
-    text = (f'[GLOBAL]\nversion = {version}\ntype = subvolume\n'
-            f'path = {mnt_path}\nstate = {state}\n')
-    if metadata:
-        text += '\n[USER_METADATA]\n'
-        text += ''.join(f'{k} = {v}\n' for k, v in metadata.items())
-    return text
-
-
-def fabricate_v1_subvol_script(data_path, pool, *, namespace=None, size=None,
-                               earmark=None, uid=0, gid=0, mode=0o755,
-                               metadata=None):
-    """
-    Bash script that fabricates a v1 subvolume the way ceph-mgr used to
-    (SubvolumeV1.create): data dir at data_path, .meta sibling under the
-    subvolume base. data_path is relative to the fs root (or absolute).
-    """
-    data_path = as_relpath(data_path)
-    base_path = dirname(data_path)
-    meta = gen_pre_v3_meta(1, data_path, metadata=metadata)
-    # escape for embedding in a double-quoted printf
-    meta_escaped = meta.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
-    cmds = [
-        'set -e',
-        f'mkdir -p -m 755 {data_path}',
-        f'setfattr -n ceph.dir.layout.pool -v {pool} {data_path}',
-        f'setfattr -n ceph.dir.subvolume -v 1 {data_path}',
-    ]
-    if namespace:
-        cmds.append('setfattr -n ceph.dir.layout.pool_namespace '
-                    f'-v {namespace} {data_path}')
-    if size is not None:
-        cmds.append(f'setfattr -n ceph.quota.max_bytes -v {size} {data_path}')
-    if earmark:
-        cmds.append(f'setfattr -n {EARMARK_XATTR} -v {earmark} {data_path}')
-    cmds += [
-        f'chown {uid}:{gid} {data_path}',
-        f'chmod {mode:o} {data_path}',
-        f'printf "{meta_escaped}" > {base_path}/{META_FILE_NAME}',
-    ]
-    return '\n'.join(cmds)
-
-
 class SubvolAutoUpgrade(CephFSTestCase):
     '''
     Helpers for testing subvol auto-upgrades.
@@ -478,10 +356,35 @@ class SubvolBase(SubvolOpsHelper):
         self.snap_names = snap_names
         self.retained = retained
 
+        # Optional create options. When set, create()/custom_create() include
+        # the matching CLI flag (or fabricate equivalent), and
+        # expected_info() / expected_fs_attrs() drive corresponding checks.
+        self.size = None              # int bytes -> --size
+        self.earmark = None           # str -> --earmark
+        self.metadata = None          # dict -> metadata set after create
+        self.namespace_isolated = False  # -> --namespace-isolated
+        self.namespace = None         # expected/actual pool namespace
+        self.uid = 0
+        self.gid = 0
+        self.mode = None              # int mode -> --mode when set
+        self.pool = None              # expected data pool
+        self.pool_layout = None       # str -> --pool_layout when set
+        self.pass_uid_gid = False     # -> --uid/--gid from self.uid/gid
+        # Hand-set on the data dir after create (not create CLI flags).
+        self.user_xattr = None        # (name, value) or None
+        self.max_files = None         # int -> ceph.quota.max_files
+        self.acl = None               # setfacl -m spec or None
+        # If True, create the subvolume group with non-default GRP_* attrs;
+        # the subvolume inherits that group's pool and uid/gid.
+        self.group_attrs = False
+
         # NOTE subclasses should call these methods at end of their __init__()
         # self._reset_paths()
         # self._verify_attrs()
         return
+
+    def __str__(self):
+        return f'{self.grp_name or "_nogroup"}/{self.name}'
 
     def _verify_attrs(self):
         assert type(self.volname) is str, \
@@ -495,6 +398,14 @@ class SubvolBase(SubvolOpsHelper):
         self._base_path = None
         self._meta_path = None
 
+    def copy_create_attrs(self, other):
+        """Copy create-option / expected-state attrs from another helper."""
+        for attr in ('size', 'earmark', 'metadata', 'namespace_isolated',
+                     'namespace', 'uid', 'gid', 'mode', 'pool', 'pool_layout',
+                     'pass_uid_gid', 'user_xattr', 'max_files', 'acl',
+                     'group_attrs'):
+            setattr(self, attr, getattr(other, attr))
+
 
     # ----- subvol basics -----
 
@@ -504,20 +415,95 @@ class SubvolBase(SubvolOpsHelper):
         raise NotImplementedError('should\'ve been overridden')
 
     def gen_base_path(self):
-        return subvol_base_path(self.name, self.grp_name)
+        grp = self.grp_name if self.grp_name else DEFAULT_GRP_NAME
+        return join(VOL_BASE_PATH, grp, self.name)
+
+    def gen_pool_namespace(self):
+        """RADOS namespace as mgr/volumes names it (SubvolumeBase.namespace)."""
+        grp = self.grp_name if self.grp_name else DEFAULT_GRP_NAME
+        return f'{POOL_NS_PFX}_{grp}_{self.name}'
+
+    def build_create_opts(self, *, default_mode=True):
+        """
+        CLI flags derived from create-option attrs. Unittest callers that
+        pass no attrs and default_mode=True still get --mode=777.
+        """
+        parts = []
+        if self.size is not None:
+            parts.append(f'--size {self.size}')
+        if self.pass_uid_gid:
+            parts.append(f'--uid {self.uid} --gid {self.gid}')
+        if self.mode is not None:
+            parts.append(f'--mode {self.mode:o}')
+        elif default_mode:
+            parts.append('--mode=777')
+        if self.namespace_isolated:
+            parts.append('--namespace-isolated')
+        if self.earmark is not None:
+            parts.append(f'--earmark {self.earmark}')
+        if self.pool_layout is not None:
+            parts.append(f'--pool_layout {self.pool_layout}')
+        return (' ' + ' '.join(parts)) if parts else ''
+
+    def expected_info(self):
+        """
+        `fs subvolume info` fields implied by create-option attrs.
+        Callers merge recorded_info / features as needed.
+        """
+        expected = dict(uid=self.uid, gid=self.gid,
+                        mode=self.mode if self.mode is not None else 0o755)
+        if self.pool is not None:
+            expected['data_pool'] = self.pool
+        if self.namespace_isolated or self.namespace:
+            expected['pool_namespace'] = self.namespace
+        if self.size is not None:
+            expected['bytes_quota'] = self.size
+        if self.earmark is not None:
+            expected['earmark'] = self.earmark
+        return expected
+
+    def expected_fs_attrs(self):
+        """
+        Data-dir owner/mode/layout/quota as implied by create-option attrs
+        (values as getfattr/stat report them: uid/gid/mode as strings).
+        """
+        mode = self.mode if self.mode is not None else 0o755
+        expected = {
+            'uid': str(self.uid),
+            'gid': str(self.gid),
+            'mode': f'{mode:o}',
+        }
+        if self.pool is not None:
+            expected['ceph.dir.layout.pool'] = self.pool
+        if self.namespace_isolated or self.namespace:
+            expected['ceph.dir.layout.pool_namespace'] = self.namespace
+        if self.size is not None:
+            expected['ceph.quota.max_bytes'] = str(self.size)
+        if self.max_files is not None:
+            expected['ceph.quota.max_files'] = str(self.max_files)
+        if self.user_xattr is not None:
+            name, val = self.user_xattr
+            expected[name] = '0x' + val.encode().hex()
+        return expected
 
 
     # ----- helpers for subvol ops -----
 
 
     def create(self, opts='', default_mode=True):
-        # unittest helpers historically default to mode 777; callers that
-        # want mgr's default (0755) can pass default_mode=False or an
-        # explicit --mode in opts.
-        if default_mode and 'mode' not in opts:
-            opts = opts + ' --mode=777'
+        # Prefer create-option attrs when the caller did not pass opts.
+        # Explicit opts keep the historical unittest path (append --mode=777).
+        if opts:
+            if default_mode and 'mode' not in opts:
+                opts = opts + ' --mode=777'
+        else:
+            opts = self.build_create_opts(default_mode=default_mode)
 
-        return super().create(self.volname, self.name, self.grp_name, opts)
+        ret = super().create(self.volname, self.name, self.grp_name, opts)
+        if self.metadata:
+            for k, v in self.metadata.items():
+                self.metadata_set(k, v)
+        return ret
 
     def rm(self, opts=''):
         return super().rm(self.volname, self.name, self.grp_name, opts)
@@ -658,22 +644,29 @@ class SubvolBase(SubvolOpsHelper):
 
 
     def apply_create_options(self, options=''):
-        if not options:
-            return
-
-        assert type(options) is str
-        options = options.split()
+        """
+        Apply size / namespace xattrs for fabricated subvols. Prefer instance
+        create-option attrs; fall back to parsing a legacy options string.
+        """
         xattrs = {}
 
-        if '--size' in options:
-            size = options[options.index('--size') + 1]
-            # testing that value passed to "--size" is indeed a number
-            size = int(size)
-            xattrs['ceph.quota.max_bytes'] = str(size)
+        size = self.size
+        namespace_isolated = self.namespace_isolated
+        if options:
+            assert type(options) is str
+            opts = options.split()
+            if '--size' in opts:
+                size = int(opts[opts.index('--size') + 1])
+            if '--namespace-isolated' in opts:
+                namespace_isolated = True
 
-        if '--namespace-isolated' in options:
-            xattrs['ceph.dir.layout.pool_namespace'] = \
-                subvol_pool_namespace(self.name, self.grp_name)
+        if size is not None:
+            xattrs['ceph.quota.max_bytes'] = str(size)
+        if namespace_isolated:
+            ns = self.namespace or self.gen_pool_namespace()
+            xattrs['ceph.dir.layout.pool_namespace'] = ns
+            if not self.namespace:
+                self.namespace = ns
 
         for k, v in xattrs.items():
             self.mount.run_shell(
@@ -774,12 +767,12 @@ class V1V2Base(SubvolBase):
 
     def gen_uuid_path(self):
         if not self._uuid_path:
-            self._uuid_path = subvol_uuid_path(self.gen_base_path(), self.uuid)
+            self._uuid_path = join(self.gen_base_path(), self.uuid)
         return self._uuid_path
 
     def gen_meta_path(self):
         if not self._meta_path:
-            self._meta_path = subvol_meta_path(self.gen_base_path())
+            self._meta_path = join(self.gen_base_path(), META_FILE_NAME)
         return self._meta_path
 
     def gen_snap_base_path(self):
@@ -787,6 +780,34 @@ class V1V2Base(SubvolBase):
 
     def gen_snap_path(self, snap_name):
         return join(self.gen_snap_base_path(), snap_name)
+
+    def gen_meta_file_content(self, metadata=None, state='complete'):
+        """
+        Contents of a pre-v3 .meta file. GLOBAL.path is the absolute mnt path.
+        """
+        mnt_path = self.gen_mnt_path()
+        if not mnt_path.startswith('/'):
+            mnt_path = '/' + mnt_path
+        if metadata is None:
+            metadata = self.metadata
+        text = f'''\
+[GLOBAL]
+version = {self.version}
+type = subvolume
+path = {mnt_path}
+state = {state}
+'''
+        if metadata:
+            text += '\n[USER_METADATA]\n'
+            text += ''.join(f'{k} = {v}\n' for k, v in metadata.items())
+        return text
+
+    def gen_pre_v3_snap_path(self, snap_name, upgraded=False):
+        """
+        Path of a pre-v3 snapshot (v1 under the data dir; v2 data under
+        .snap/<snap>/<uuid>). upgraded only applies to v1 after auto-upgrade.
+        """
+        raise NotImplementedError('derived class should override this method')
 
 
     # ----- create stuff without create command ------
@@ -834,15 +855,18 @@ class SubvolV1Helper(V1V2Base):
         return 1
 
     def gen_mnt_path(self):
-        return subvol_uuid_path(self.gen_base_path(), self.uuid)
+        return join(self.gen_base_path(), self.uuid)
 
     def gen_snap_base_path(self):
         if not self._snap_base_path:
             self._snap_base_path = join(self.gen_uuid_path(), SNAP_BASE_DIR)
         return self._snap_base_path
 
-    def gen_snap_path(self, snap_name):
-        return subvol_v1_snap_path(self.gen_base_path(), self.uuid, snap_name)
+    def gen_pre_v3_snap_path(self, snap_name, upgraded=False):
+        if upgraded:
+            return join(self.gen_base_path(), INCAR_BASE_DIR, self.uuid,
+                        MNT_DIR, SNAP_BASE_DIR, snap_name)
+        return join(self.gen_base_path(), self.uuid, SNAP_BASE_DIR, snap_name)
 
 
     # ----- override subvol op methods ------
@@ -867,45 +891,61 @@ class SubvolV1Helper(V1V2Base):
     # ----- create stuff without create command ------
 
 
-    def custom_create(self, create_options='', *, pool=None, uid=0, gid=0,
-                      mode=0o777, earmark=None, metadata=None,
+    def custom_create(self, create_options='', *, pool=None, uid=None, gid=None,
+                      mode=None, earmark=None, metadata=None,
                       populate_files=True):
         '''
-        For testing subvol auto-upgrade, create v1 subvol without using
-        'subvolume create' command.
+        For testing subvol auto-upgrade, create a v1 subvol without using
+        'subvolume create' (same layout as SubvolumeV1.create), via the
+        admin mount, one command at a time.
 
-        When pool is given, fabricate via fabricate_v1_subvol_script (full
-        fidelity to SubvolumeV1.create, including mark_subvolume). Otherwise
-        keep the lightweight unittest path (mkdir + optional create_options).
+        Keyword args override create-option attrs when not None; attrs are
+        used otherwise (and updated from create_options when that is given).
         '''
         self.uuid = gen_uuid()
         self._reset_paths()
 
-        namespace = None
-        size = None
         if create_options:
             opts = create_options.split()
             if '--size' in opts:
-                size = int(opts[opts.index('--size') + 1])
+                self.size = int(opts[opts.index('--size') + 1])
             if '--namespace-isolated' in opts:
-                namespace = subvol_pool_namespace(self.name, self.grp_name)
+                self.namespace_isolated = True
 
+        if self.namespace_isolated and not self.namespace:
+            self.namespace = self.gen_pool_namespace()
+
+        pool = self.pool if pool is None else pool
+        uid = self.uid if uid is None else uid
+        gid = self.gid if gid is None else gid
+        mode = (self.mode if self.mode is not None else 0o777) if mode is None \
+            else mode
+        earmark = self.earmark if earmark is None else earmark
+        metadata = self.metadata if metadata is None else metadata
+
+        path = self.gen_mnt_path().lstrip('/')
+        m = self.mount
+        m.run_shell(f'mkdir -p -m 755 {path}', sudo=True)
         if pool is not None:
-            script = fabricate_v1_subvol_script(
-                as_relpath(self.gen_mnt_path()), pool,
-                namespace=namespace, size=size, earmark=earmark,
-                uid=uid, gid=gid, mode=mode, metadata=metadata)
-            self.mount.run_shell_payload(script, sudo=True)
-        else:
-            self.mount.run_shell(f'mkdir -p ./{self.gen_mnt_path()}')
-            # as SubvolumeV1.mark_subvolume()
-            self.mount.run_shell(
-                f'setfattr -n ceph.dir.subvolume -v 1 ./{self.gen_mnt_path()}')
-            self.apply_create_options(create_options)
-            self.mount.run_shell(f'chmod {mode:o} ./{self.gen_mnt_path()}')
-            self.mount.write_file(as_relpath(self.gen_meta_path()),
-                                  gen_pre_v3_meta(1, self.gen_mnt_path()),
-                                  sudo=True)
+            m.run_shell(f'setfattr -n ceph.dir.layout.pool -v {pool} {path}',
+                        sudo=True)
+        # as SubvolumeV1.mark_subvolume()
+        m.run_shell(f'setfattr -n ceph.dir.subvolume -v 1 {path}', sudo=True)
+        if self.namespace_isolated and self.namespace:
+            m.run_shell(
+                f'setfattr -n ceph.dir.layout.pool_namespace -v {self.namespace} '
+                f'{path}', sudo=True)
+        if self.size is not None:
+            m.run_shell(f'setfattr -n ceph.quota.max_bytes -v {self.size} {path}',
+                        sudo=True)
+        if earmark:
+            m.run_shell(f'setfattr -n {EARMARK_XATTR} -v {earmark} {path}',
+                        sudo=True)
+        m.run_shell(f'chown {uid}:{gid} {path}', sudo=True)
+        m.run_shell(f'chmod {mode:o} {path}', sudo=True)
+        m.write_file(self.gen_meta_path().lstrip('/'),
+                     self.gen_meta_file_content(metadata=metadata),
+                     sudo=True)
 
         if populate_files:
             self.write_files(num=5, ifx='at-creation')
@@ -943,12 +983,16 @@ class SubvolV2Helper(V1V2Base):
         return 2
 
     def gen_mnt_path(self):
-        return subvol_uuid_path(self.gen_base_path(), self.uuid)
+        return join(self.gen_base_path(), self.uuid)
 
     def gen_snap_base_path(self):
         if not self._snap_base_path:
             self._snap_base_path = join(self.gen_base_path(), SNAP_BASE_DIR)
         return self._snap_base_path
+
+    def gen_pre_v3_snap_path(self, snap_name, upgraded=False):
+        # v2 snap data stays under .snap/<snap>/<uuid> across auto-upgrade
+        return join(self.gen_base_path(), SNAP_BASE_DIR, snap_name, self.uuid)
 
     # ----- subvol op methods -----
 
@@ -998,8 +1042,8 @@ class SubvolV2Helper(V1V2Base):
         self.apply_create_options(create_options)
         self.mount.run_shell(f'chmod -R 777 ./{self.gen_mnt_path()}')
 
-        self.mount.write_file(as_relpath(self.gen_meta_path()),
-                              gen_pre_v3_meta(2, self.gen_mnt_path()),
+        self.mount.write_file(self.gen_meta_path().lstrip('/'),
+                              self.gen_meta_file_content(),
                               sudo=True)
 
         self.write_files(num=5, ifx='at-creation')
@@ -1097,6 +1141,7 @@ class SubvolV3Helper(SubvolBase):
                 assert False, f'unexpected pre-v3 helper {type(subvol)}'
 
             self.add_incar(self.uuid, subvol.snap_names, self.retained)
+            self.copy_create_attrs(subvol)
         else:
             assert mount and volname and not subvol
 
@@ -1167,16 +1212,15 @@ class SubvolV3Helper(SubvolBase):
 
     def gen_meta_symlink_path(self):
         if not self._meta_symlink_path:
-            self._meta_symlink_path = subvol_meta_path(self.gen_base_path())
+            self._meta_symlink_path = join(self.gen_base_path(), META_FILE_NAME)
         return self._meta_symlink_path
 
     def gen_meta_file_name(self, uuid=None):
         uuid = uuid if uuid else self.uuid
-        return subvol_v3_meta_file_name(uuid)
+        return f'.meta.{uuid}'
 
     def gen_meta_path(self, uuid=None):
-        return subvol_meta_path(self.gen_base_path(),
-                                self.gen_meta_file_name(uuid))
+        return join(self.gen_base_path(), self.gen_meta_file_name(uuid))
 
     def gen_incar_base_path(self):
         if not self._incar_base_path:
@@ -1190,11 +1234,13 @@ class SubvolV3Helper(SubvolBase):
 
     def gen_mnt_path(self, uuid=None):
         uuid = uuid if uuid else self.uuid
-        return subvol_v3_mnt_path(self.gen_base_path(), uuid)
+        return join(self.gen_base_path(), self.INCAR_BASE_DIR, uuid,
+                    self.MNT_DIR)
 
     def gen_retained_path(self, uuid=None):
         uuid = uuid if uuid else self.uuid
-        return subvol_v3_retained_path(self.gen_base_path(), uuid)
+        return join(self.gen_base_path(), self.INCAR_BASE_DIR, uuid,
+                    self.RETAINED_DIR)
 
     def gen_snap_base_path(self, uuid=None):
         return join(self.gen_incar_path(uuid), SNAP_BASE_DIR)
@@ -1206,20 +1252,20 @@ class SubvolV3Helper(SubvolBase):
         return join(self.gen_snap_base_path(uuid), snap_name, self.MNT_DIR)
 
     def gen_prev_path(self, uuid):
-        return subvol_uuid_path(self.gen_base_path(), uuid)
+        return join(self.gen_base_path(), uuid)
 
     def gen_v2_snap_path(self, snap_name):
         assert self.v2_uuid
         return join(self.gen_base_path(), SNAP_BASE_DIR, snap_name)
 
     def gen_v2_snap_data_path(self, snap_name):
-        return subvol_v2_snap_data_path(self.gen_base_path(), self.v2_uuid,
-                                        snap_name)
+        return join(self.gen_base_path(), SNAP_BASE_DIR, snap_name,
+                    self.v2_uuid)
 
     def gen_v1_snap_path(self, snap_name):
         assert self.v1_uuid
-        return subvol_v1_snap_path(self.gen_base_path(), self.v1_uuid,
-                                   snap_name, upgraded=True)
+        return join(self.gen_base_path(), self.INCAR_BASE_DIR, self.v1_uuid,
+                    self.MNT_DIR, SNAP_BASE_DIR, snap_name)
 
     def gen_v1_snap_data_path(self, snap_name):
             assert False, \

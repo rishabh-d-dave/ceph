@@ -1,26 +1,10 @@
-# Optional overrides for volumes_upgrade. Profiles and which subvolume gets
-# which profile default in qa/tasks/volumes_upgrade.py (DEFAULT_PROFILES /
-# DEFAULT_SUBVOLUMES); uncomment/extend below only to override.
+# Optional overrides for volumes_upgrade. Subvolume create options are set
+# in qa/tasks/volumes_upgrade.py on each helper (not via profile maps).
 overrides:
   install:
-    # setfacl/getfacl, for the acl attribute
+    # setfacl/getfacl, for ACL attrs on data dirs
     extra_system_packages:
       rpm:
         - acl
       deb:
         - acl
-  # volumes_upgrade:
-  #   profiles:
-  #     bare: []
-  #     full: [size, owner, mode, namespace, earmark, metadata, xattr,
-  #            max_files, acl]
-  #     partial: [size]
-  #     pool_layout: [pool, namespace]
-  #     group: [group]
-  #   subvolumes:
-  #     sv_io_0: bare
-  #     sv_io_1: full
-  #     grp_io/sv_io_2: group
-  #     grp_src/sv_clone_src: pool_layout
-  #     sv_attr_0: partial
-  #     grp_attr/sv_attr_1: full

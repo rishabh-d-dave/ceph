@@ -3,59 +3,64 @@ subvolumes to the v3 layout is non-disruptive across a Ceph upgrade. The
 work is done by qa/tasks/volumes_upgrade.py: one `task()` contextmanager
 sets up on the old release, yields while the suite upgrades the cluster,
 then verifies auto-upgrade on exit. The only extra entry point is
-`after_mgr`, used between a mgr-only upgrade and upgrading the rest.
+`verify_mgr_first`, used between a mgr-first upgrade and upgrading the rest.
 
 Matrix
 ======
 
   0-from     tentacle | umbrella      release upgraded from
   1-ranks    1 | 2                    max_mds
-  3-setup    v1 | v2                  version of the pre-v3 subvolumes
   4-upgrade  mgr-only | full          ceph-mgr first, or everything at once
 
-That's 16 jobs. Clients are fixed (2-client): client.0 and client.2 are
-kernel, client.1 is ceph-fuse, client.3 (kernel) mounts the file system
-root as the admin mount that inspects the on-disk layout.
+That's 8 jobs. Every job creates both v1 and v2 subvolumes (no v1|v2
+facet). Clients are fixed (2-client): client.0 and client.2 are kernel,
+client.1 is ceph-fuse, client.3 (kernel) mounts the file system root as
+the admin mount that inspects the on-disk layout.
 
-Each job is one fat job: every attribute profile below is exercised in
-the same run (defaults in volumes_upgrade.DEFAULT_PROFILES /
-DEFAULT_SUBVOLUMES). They are not suite facets and add no jobs.
+Subvolumes
+==========
 
-Subvolumes and attribute profiles
-=================================
+Create options and hand-set data-dir attrs are set explicitly on each
+SubvolV*Helper in qa/tasks/volumes_upgrade.py (source of truth). Names are
+documentation only and are never parsed for behavior.
 
-Each v1/v2 subvolume (other than clones, purges and the subvolumes removed
-with retained snapshots, which are plain v2) is created with an attribute
-profile. A profile is a list of attributes (see ATTRS in
-qa/tasks/volumes_upgrade.py). As configured by default:
+  subvolume                               client    snaps  attrs (summary)
 
-  bare         no attributes, as `fs subvolume create` without options
-  full         --size, --uid/--gid, --mode, --namespace-isolated,
-               --earmark, user metadata, plus a user xattr, an ACL and a
-               file count quota (ceph.quota.max_files) set on the data dir
-  partial      --size only
-  pool_layout  --pool_layout on a second data pool (added to the volume
-               during setup), with --namespace-isolated
-  group        no attributes of its own, in a subvolume group created with
-               --size, --uid/--gid, --mode and --pool_layout (the second
-               data pool), from which it inherits the data pool and uid/gid
+  v1
+  ----
+  subvol_v1_io_attr_size                  client.0  2      size
+  subvol_v1_no_io_no_attrs                -         0      none
+  subvol_v1_no_io_attr_size               -         0      size
+  group_attr/subvol_v1_no_io_all_attrs    -         0      all attrs (on sv)
 
-  subvolume                 profile      client       pre-v3 snapshots
-  sv_io_0                   bare         client.0     0
-  sv_io_1                   full         client.1     1
-  grp_io/sv_io_2            group        client.2     2
-  grp_src/sv_clone_src      pool_layout  -            2 (clone source)
-  sv_attr_0                 partial      -            0
-  grp_attr/sv_attr_1        full         -            0
+  v2
+  ----
+  subvol_v2_io_all_attrs                  client.1  1      all attrs
+  group_io/subvol_v2_io_attr_group        client.2  2      inherit group GRP_*
+  group_src/subvol_clone_src_attr_pool_ns -         2      pool_layout + ns
+  subvol_v2_no_io_no_attrs                -         0      none
+  subvol_v2_no_io_attr_size               -         0      size
+  group_attr/subvol_v2_no_io_all_attrs    -         0      all attrs (on sv)
 
-v2 subvolumes are created through `fs subvolume create` (SubvolV2Helper).
-No release that can be upgraded from creates v1 subvolumes, so they are
-fabricated with SubvolV1Helper.custom_create in the layout ceph-mgr used
-to create them in (data and v1 snapshots in <subvolume>/<uuid>, .meta with
-version 1), with the attributes of their profile. The first snapshot of a
-v1 subvolume is taken directly in its data dir, and the rest through the
-old ceph-mgr, which must handle it as v1. A v1 subvolume without snapshots
-is not accessed through the old ceph-mgr, which would upgrade it to v2.
+subvol_*_io_* have a client and background IO through the upgrade.
+subvol_*_no_io_* also go through auto-upgrade (same attribute checks) but
+have no client and no writer. The clone source has no client either; it is
+snapshotted and cloned. Clones/purges/retained are always v2 (old mgr
+creates clones as v2; retained snaps are v2-only).
+
+"group inherit" means: subvolume create options empty, but its group is
+created with --size/--uid/--gid/--mode/--pool_layout (DATA_POOL_2); the
+subvolume inherits that pool and uid/gid.
+
+"all attrs" means size, owner, mode, namespace-isolated, earmark, metadata,
+plus user xattr, ACL and max_files on the data dir.
+
+v2 subvolumes use `fs subvolume create` (SubvolV2Helper). v1 subvolumes are
+fabricated with SubvolV1Helper.custom_create (no upgradeable release still
+creates v1 via mgr). The first snapshot of a v1 subvolume is taken directly
+in its data dir; further snaps go through the old mgr, which must keep it
+v1. A v1 subvolume without snapshots is not opened via the old mgr (that
+would upgrade it to v2).
 
 Setup, on the old release (volumes_upgrade task enter)
 ======================================================
@@ -79,7 +84,7 @@ Setup, on the old release (volumes_upgrade task enter)
     (https://tracker.ceph.com/issues/81383). They are v2, as the old
     ceph-mgr creates clones so, and are of:
       - snap0 of the clone source (3 clones, one in a group)
-      - the snapshot of sv_io_1, whose client keeps writing to it
+      - the snapshot of subvol_v2_io_all_attrs, whose client keeps writing to it
       - the snapshot of a v2 subvolume then removed with
         `--retain-snapshots`, its data dir caught mid-purge
   - 3 v2 subvolumes are removed (`fs subvolume rm`). 2 v2 subvolumes with a
@@ -94,18 +99,18 @@ Before the upgrade, setup checks that:
 
   - the clones are pending with nothing copied, and their source snapshots
     report has_pending_clones
-  - each pre-v3 subvolume's data dir has the attributes of its profile, as
-    the file system has them. These are recorded as the baseline: owner,
+  - each pre-v3 subvolume's data dir has the attributes set on its helper,
+    as the file system has them. These are recorded as the baseline: owner,
     mode, ceph.dir.layout.pool and .pool_namespace, ceph.quota.max_bytes
     and .max_files, and all user.* and system.* (POSIX ACL) xattrs,
     including the earmark
   - a v1 subvolume without snapshots is strictly v1 and untouched
   - every other pre-v3 subvolume works through the old ceph-mgr: getpath,
-    `fs subvolume info` (attributes as per its profile), snapshot
+    `fs subvolume info` (matching helper fields), snapshot
     ls/info/metadata/getpath, and still in the pre-v3 layout. Its info and
     snapshot info are recorded as the baseline
-  - the attributed group's info (uid, gid, mode, data pool, quota) is as
-    created, and is recorded
+  - groups created with GRP_* attrs have the expected info (uid, gid, mode,
+    data pool, quota), and it is recorded
   - `fs subvolume authorized_list` lists the auth IDs authorized so far
   - each subvolume is marked as a subvolume (hard links out of it get
     EXDEV)
@@ -116,7 +121,7 @@ Upgrade
 mgr-only (4-upgrade/mgr-only.yaml): only ceph-mgr is upgraded, through a
 staggered `ceph orch upgrade` (--daemon-types mgr). The new
 ceph-mgr can't auto-upgrade, as the old MDS doesn't know the
-ceph.dir.subvolume.prevpath vxattr. volumes_upgrade.after_mgr checks that:
+ceph.dir.subvolume.prevpath vxattr. volumes_upgrade.verify_mgr_first checks that:
 
   - the writers are still making progress
   - every pre-v3 subvolume keeps working as v1/v2 (a v1 one without
@@ -195,9 +200,9 @@ Clones:
     the snapshot and their attributes match their source.
   - The clone made with only ceph-mgr upgraded is v3 with its data intact.
   - New clones of pre-v3 snapshots work, with data and attributes as
-    above: snap0 and snap1 of the clone source (pool_layout), and the last
-    snapshot of sv_io_2 (group, so its data pool is the group's). Their
-    sources report no pending clones afterwards.
+    above: snap0 and snap1 of the clone source (attr_pool_ns), and the last
+    snapshot of subvol_v2_io_attr_group (inherits the group's data pool).
+    Their sources report no pending clones afterwards.
 
 Purges and retained snapshots:
 
